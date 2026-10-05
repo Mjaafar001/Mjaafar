@@ -94,7 +94,7 @@
 
   // ---------- State ----------
   function defaultSettings() {
-    return { academyName: 'Football Academy', currency: '₦', monthlyFee: 50000, sessionsPerMonth: 8 };
+    return { academyName: 'Football Academy', currency: '₦', monthlyFee: 50000, sessionsPerMonth: 8, chargeAbsences: false };
   }
   function defaultGroups() {
     return [
@@ -318,30 +318,64 @@
   }
   const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
-  const paidForMonth = (playerId, month) => sum(state.payments.filter((p) => p.playerId === playerId && p.period === month), (p) => p.amount);
+  // ---------- Session balances ----------
+  // Each player has a running balance of sessions: payments add sessions, attended
+  // sessions use them up. A negative balance means the player owes for sessions taken.
+  const sessionPrice = () => Number(state.settings.monthlyFee || 0) / Math.max(1, Number(state.settings.sessionsPerMonth || 1));
+  const round1 = (n) => Math.round(n * 10) / 10;
+  const fmtSessions = (n) => {
+    const r = round1(n);
+    return `${r.toLocaleString()} session${Math.abs(r) === 1 ? '' : 's'}`;
+  };
+  // Sessions a payment buys. Stored on the payment so a later price change doesn't rewrite history.
+  const paymentSessions = (x) => (x.sessions != null && x.sessions !== '' ? Number(x.sessions) : sessionPrice() ? Number(x.amount || 0) / sessionPrice() : 0);
+  const paymentMonth = (x) => (x.date || x.period || '').slice(0, 7);
 
-  function feeStatus(player, month = thisMonth()) {
-    const paid = paidForMonth(player.id, month);
-    const notYetJoined = player.joined && player.joined.slice(0, 7) > month;
-    const fee = notYetJoined ? 0 : Number(state.settings.monthlyFee || 0);
-    if (!fee) return { fee, paid, due: 0, status: 'n/a' };
-    const due = Math.max(0, fee - paid);
-    return { fee, paid, due, status: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid' };
+  function usesSession(mark) {
+    return mark === 'P' || mark === 'L' || (mark === 'A' && state.settings.chargeAbsences);
   }
 
-  const feeBadge = (fs) =>
-    fs.status === 'paid' ? '<span class="badge ok">Paid</span>'
-      : fs.status === 'partial' ? `<span class="badge warn">Owes ${money(fs.due)}</span>`
-      : fs.status === 'unpaid' ? '<span class="badge bad">Unpaid</span>'
-      : '<span class="muted">—</span>';
+  function playerBalance(p) {
+    const opening = Number(p.openingBalance || 0);
+    const bought = sum(state.payments.filter((x) => x.playerId === p.id), paymentSessions);
+    const used = state.sessions.filter((s) => usesSession(s.attendance?.[p.id])).length;
+    const balance = round1(opening + bought - used);
+    return { opening, bought: round1(bought), used, balance, owed: balance < 0 ? -balance * sessionPrice() : 0 };
+  }
+
+  const LOW_BALANCE = 2;
+  // Small warning shown next to a name on the register when a player owes or is about to run out.
+  function balanceTag(p) {
+    const b = playerBalance(p);
+    if (b.balance < 0) return ` <span class="tag bad">owes ${fmtSessions(-b.balance)}</span>`;
+    if (b.balance <= LOW_BALANCE) return ` <span class="tag warn">${fmtSessions(b.balance)} left</span>`;
+    return '';
+  }
+  function balanceBadge(b) {
+    if (b.balance < 0) return `<span class="badge bad" title="Owes ${money(b.owed)}">Owes ${fmtSessions(-b.balance)}</span>`;
+    if (b.balance === 0) return '<span class="badge warn">0 left</span>';
+    if (b.balance <= LOW_BALANCE) return `<span class="badge warn">${fmtSessions(b.balance)} left</span>`;
+    return `<span class="badge ok">${fmtSessions(b.balance)} left</span>`;
+  }
 
   function monthFinance(month) {
-    const players = activePlayers();
-    const expected = sum(players, (p) => feeStatus(p, month).fee);
-    const collected = sum(state.payments.filter((p) => p.period === month), (p) => p.amount);
+    const pays = state.payments.filter((x) => paymentMonth(x) === month);
+    const collected = sum(pays, (x) => x.amount);
+    const sessionsSold = round1(sum(pays, paymentSessions));
     const spent = sum(state.expenses.filter((x) => x.date?.startsWith(month)), (x) => x.amount);
-    const outstanding = sum(players, (p) => feeStatus(p, month).due);
-    return { expected, collected, spent, outstanding, net: collected - spent };
+    return { collected, sessionsSold, spent, net: collected - spent };
+  }
+
+  function owingSummary(players = activePlayers()) {
+    const rows = players.map((p) => ({ p, b: playerBalance(p) }));
+    const owing = rows.filter((r) => r.b.balance < 0);
+    return {
+      rows,
+      owingCount: owing.length,
+      owedAmount: sum(owing, (r) => r.b.owed),
+      owedSessions: round1(sum(owing, (r) => -r.b.balance)),
+      prepaidSessions: round1(sum(rows.filter((r) => r.b.balance > 0), (r) => r.b.balance)),
+    };
   }
 
   // ---------- Modal ----------
@@ -371,7 +405,7 @@
   // ---------- Players ----------
   function editPlayer(id) {
     const p = id ? playerById(id) : null;
-    const v = p || { firstName: '', lastName: '', dob: '', groupId: '', guardianName: '', phone: '', email: '', address: '', medical: '', joined: isoDate(), status: 'active', notes: '' };
+    const v = p || { firstName: '', lastName: '', dob: '', groupId: '', guardianName: '', phone: '', email: '', address: '', medical: '', joined: isoDate(), status: 'active', notes: '', openingBalance: 0 };
     openModal(`
       <h2>${p ? 'Edit player' : 'Register new player'}</h2>
       <div class="form-grid">
@@ -391,11 +425,14 @@
           <option value="active" ${v.status === 'active' ? 'selected' : ''}>Active</option>
           <option value="inactive" ${v.status === 'inactive' ? 'selected' : ''}>Inactive / left</option>
         </select></div>
+        <div class="field"><label for="f-opening">Starting balance (sessions)</label><input id="f-opening" type="number" step="any" name="openingBalance" value="${esc(v.openingBalance ?? 0)}">
+          <span class="hint">Sessions owed or prepaid before using this app. Use a minus for owed, e.g. -3.</span></div>
       </div>
       ${modalActions(p ? 'Save changes' : 'Register')}
     `, (data) => {
       data.firstName = data.firstName.trim();
       data.lastName = data.lastName.trim();
+      data.openingBalance = Number(data.openingBalance || 0);
       const rec = p ? { ...p, ...data } : { id: uid(), ...data };
       Store.put('players', rec).then(() => toast(p ? 'Player updated' : `${data.firstName} registered`), () => {});
       render();
@@ -438,7 +475,7 @@
     const g = groupById(p.groupId);
     const att = playerAttendance(id);
     const month = thisMonth();
-    const fs = feeStatus(p, month);
+    const b = playerBalance(p);
     const history = state.sessions.filter((s) => s.attendance?.[id]).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
     const pays = state.payments.filter((x) => x.playerId === id).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
     openModal(`
@@ -449,8 +486,9 @@
         <div><div class="hint">Parent / guardian</div>${esc(p.guardianName) || '—'}</div>
         <div><div class="hint">Phone</div>${p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : '—'}</div>
         <div><div class="hint">Email</div>${esc(p.email) || '—'}</div>
-        <div><div class="hint">${esc(fmtMonth(month))} fee</div>${feeBadge(fs)}</div>
-        <div><div class="hint">Sessions attended this month</div>${attendedInMonth(id, month)} of ${state.settings.sessionsPerMonth}</div>
+        <div><div class="hint">Session balance</div>${balanceBadge(b)}${b.owed ? ` <span class="muted">(${money(b.owed)})</span>` : ''}</div>
+        <div><div class="hint">Sessions attended this month</div>${attendedInMonth(id, month)}</div>
+        <div class="full hint">${b.opening ? `${fmtSessions(b.opening)} starting balance · ` : ''}${fmtSessions(b.bought)} paid for · ${fmtSessions(b.used)} used</div>
         ${p.medical ? `<div class="full"><div class="hint">Medical</div><span class="flag">Medical</span> ${esc(p.medical)}</div>` : ''}
         ${p.notes ? `<div class="full"><div class="hint">Notes</div>${esc(p.notes)}</div>` : ''}
       </div>
@@ -458,7 +496,7 @@
       <p class="muted tight">${att.attended} attended · ${att.absent} absent · ${att.late} late · ${att.excused} excused</p>
       ${history.length ? `<div class="table-wrap"><table><tbody>${history.map((s) => `<tr><td>${fmtDate(s.date)}</td><td>${esc(s.type)}</td><td><span class="mark m-${s.attendance[id]}">${STATUS[s.attendance[id]].label}</span></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No sessions recorded yet.</p>'}
       <h3>Recent payments</h3>
-      ${pays.length ? `<div class="table-wrap"><table><tbody>${pays.map((x) => `<tr><td>${fmtDate(x.date)}</td><td>${fmtMonth(x.period)}</td><td class="num">${money(x.amount)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No payments recorded.</p>'}
+      ${pays.length ? `<div class="table-wrap"><table><tbody>${pays.map((x) => `<tr><td>${fmtDate(x.date)}</td><td>${fmtSessions(paymentSessions(x))}</td><td class="num">${money(x.amount)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No payments recorded.</p>'}
       <div class="modal-actions"><button value="cancel">Close</button></div>
     `, () => {});
   }
@@ -467,37 +505,76 @@
   function addPayment(playerId) {
     const players = activePlayers();
     if (!players.length) return notify('Register a player first.');
-    const month = ui.payMonth || thisMonth();
-    const pre = playerId ? playerById(playerId) : null;
+    const fee = Number(state.settings.monthlyFee || 0);
+    const per = Number(state.settings.sessionsPerMonth || 0);
     openModal(`
-      <h2>Record fee payment</h2>
+      <h2>Record payment</h2>
       <div class="form-grid">
         <div class="field full"><label for="p-player">Player *</label><select id="p-player" name="playerId" required>
           <option value="">Select…</option>
           ${players.map((p) => `<option value="${p.id}" ${p.id === playerId ? 'selected' : ''}>${esc(fullName(p))} (${esc(groupById(p.groupId)?.name || '')})</option>`).join('')}
-        </select></div>
-        <div class="field"><label for="p-amount">Amount (${esc(state.settings.currency)}) *</label><input id="p-amount" type="number" name="amount" min="0" step="any" required value="${pre ? feeStatus(pre, month).due || '' : ''}"></div>
-        <div class="field"><label for="p-period">For month *</label><input id="p-period" type="month" name="period" required value="${month}"></div>
+        </select>
+        <span class="hint" id="p-current"></span></div>
+        <div class="field full"><span class="label-like">Quick fill</span>
+          <div class="toolbar">
+            ${[1, 2, 3].map((m) => `<button type="button" class="small" data-months="${m}">${m} month${m > 1 ? 's' : ''} · ${money(fee * m)}</button>`).join('')}
+            <button type="button" class="small" id="p-clear" hidden>Clear debt</button>
+          </div></div>
+        <div class="field"><label for="p-amount">Amount (${esc(state.settings.currency)}) *</label><input id="p-amount" type="number" name="amount" min="0" step="any" required></div>
+        <div class="field"><label for="p-sessions">Sessions this pays for *</label><input id="p-sessions" type="number" name="sessions" step="any" required>
+          <span class="hint">Filled in from the amount at ${money(sessionPrice())} a session. Change it for discounts or free sessions.</span></div>
         <div class="field"><label for="p-date">Date received</label><input id="p-date" type="date" name="date" value="${isoDate()}"></div>
         <div class="field"><label for="p-method">Method</label><select id="p-method" name="method"><option>Cash</option><option>Bank transfer</option><option>POS / card</option><option>Other</option></select></div>
-        <div class="field full"><label for="p-note">Note</label><input id="p-note" name="note"></div>
+        <div class="field full"><label for="p-note">Note</label><input id="p-note" name="note" placeholder="e.g. October to December"></div>
       </div>
-      <p class="hint">Monthly fee is ${money(state.settings.monthlyFee)} for ${state.settings.sessionsPerMonth} sessions.</p>
+      <p class="after" id="p-after"></p>
       ${modalActions('Save payment')}
     `, (data) => {
-      Store.put('payments', { id: uid(), ...data, amount: Number(data.amount), by: Store.me.id || null })
+      const sessions = Number(data.sessions);
+      if (!Number.isFinite(sessions)) return false;
+      Store.put('payments', { id: uid(), ...data, amount: Number(data.amount), sessions: round1(sessions), period: (data.date || isoDate()).slice(0, 7), by: Store.me.id || null })
         .then(() => toast('Payment recorded'), () => {});
       render();
     });
-    const sel = $('[name=playerId]', modalForm);
-    const amt = $('[name=amount]', modalForm);
-    const per = $('[name=period]', modalForm);
-    const refill = () => {
+    const sel = $('#p-player', modalForm);
+    const amt = $('#p-amount', modalForm);
+    const ses = $('#p-sessions', modalForm);
+    const cur = $('#p-current', modalForm);
+    const after = $('#p-after', modalForm);
+    const clearBtn = $('#p-clear', modalForm);
+    let sessionsEdited = false;
+    const update = () => {
       const p = playerById(sel.value);
-      if (p) amt.value = feeStatus(p, per.value).due || '';
+      const b = p ? playerBalance(p) : null;
+      cur.innerHTML = b ? `Current balance: ${balanceBadge(b)}${b.owed ? ` which is ${money(b.owed)}` : ''}` : '';
+      clearBtn.hidden = !(b && b.balance < 0);
+      if (b && b.balance < 0) clearBtn.textContent = `Clear debt · ${money(b.owed)}`;
+      const add = Number(ses.value);
+      after.innerHTML = b && ses.value !== '' && Number.isFinite(add)
+        ? `After this payment: ${balanceBadge({ ...b, balance: round1(b.balance + add) })}`
+        : '';
     };
-    sel.addEventListener('change', refill);
-    per.addEventListener('change', refill);
+    const setAmount = (amount, sessions) => {
+      amt.value = amount;
+      ses.value = sessions;
+      sessionsEdited = false;
+      update();
+    };
+    amt.addEventListener('input', () => {
+      if (!sessionsEdited && sessionPrice()) ses.value = round1(Number(amt.value || 0) / sessionPrice());
+      update();
+    });
+    ses.addEventListener('input', () => { sessionsEdited = true; update(); });
+    sel.addEventListener('change', update);
+    $$('[data-months]', modalForm).forEach((btn) => btn.addEventListener('click', () => {
+      const m = Number(btn.dataset.months);
+      setAmount(fee * m, per * m);
+    }));
+    clearBtn.addEventListener('click', () => {
+      const b = playerBalance(playerById(sel.value));
+      setAmount(Math.round(b.owed), -b.balance);
+    });
+    setAmount(fee, per);
   }
 
   // ---------- Expenses ----------
@@ -527,7 +604,7 @@
   const ui = {
     playerSearch: '', playerGroup: '', playerStatus: 'active',
     attGroup: '', attDate: isoDate(),
-    payMonth: thisMonth(), payGroup: '',
+    payMonth: thisMonth(), payGroup: '', payFilter: '',
     expMonth: thisMonth(), expCat: '',
     repFrom: '', repTo: '', repGroup: '',
   };
@@ -543,7 +620,7 @@
     const monthSessions = sessionsIn(month);
     const avgRate = avg(monthSessions.map(sessionRate).filter((r) => r != null));
     const f = monthFinance(month);
-    const owing = active.filter((p) => feeStatus(p, month).due > 0).length;
+    const owe = owingSummary(active);
 
     const since = isoDate(new Date(Date.now() - 30 * 864e5));
     const lowAtt = active
@@ -563,8 +640,8 @@
       <div class="stats">
         ${stat('Active players', active.length, `${state.players.length - active.length} inactive`)}
         ${stat('Attendance', pct(avgRate), `${monthSessions.length} sessions this month`)}
-        ${stat('Fees collected', money(f.collected), `of ${money(f.expected)} expected`)}
-        ${stat('Fees outstanding', money(f.outstanding), `${owing} player${owing === 1 ? '' : 's'} still owe`, f.outstanding ? 'warn' : '')}
+        ${stat('Fees collected', money(f.collected), `${fmtSessions(f.sessionsSold)} paid for this month`)}
+        ${stat('Owed to academy', money(owe.owedAmount), `${owe.owingCount} player${owe.owingCount === 1 ? '' : 's'} owe ${fmtSessions(owe.owedSessions)}`, owe.owedAmount ? 'bad' : '')}
         ${stat('Expenses', money(f.spent), `${state.expenses.filter((x) => x.date?.startsWith(month)).length} items`)}
         ${stat('Net this month', money(f.net), 'fees collected minus expenses', f.net < 0 ? 'bad' : 'good')}
       </div>
@@ -620,7 +697,7 @@
           </select>
         </div>
         ${list.length ? `<div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>Group</th><th class="num">Age</th><th class="hide-sm">Guardian</th><th class="hide-sm">Phone</th><th class="num">Attendance</th><th>${esc(shortMonth(month))} fee</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Group</th><th class="num">Age</th><th class="hide-sm">Guardian</th><th class="hide-sm">Phone</th><th class="num">Attendance</th><th>Balance</th><th></th></tr></thead>
           <tbody>${list.map((p) => {
             const a = playerAttendance(p.id);
             const g = groupById(p.groupId);
@@ -633,7 +710,7 @@
               <td class="hide-sm">${esc(p.guardianName)}</td>
               <td class="hide-sm">${esc(p.phone)}</td>
               <td class="num">${pct(a.rate)}</td>
-              <td>${feeBadge(feeStatus(p, month))}</td>
+              <td>${balanceBadge(playerBalance(p))}</td>
               <td class="actions">
                 <button class="small" data-act="edit-player" data-id="${p.id}">Edit</button>
                 <button class="small danger" data-act="delete-player" data-id="${p.id}" aria-label="Delete ${esc(fullName(p))}">Delete</button>
@@ -695,7 +772,7 @@
           </div>
           <div class="roster">${roster.map((p) => `
             <div class="att-row">
-              <span class="att-name">${esc(fullName(p))}${p.status !== 'active' ? ' <span class="muted">(inactive)</span>' : ''}${medFlag(p)}</span>
+              <span class="att-name">${esc(fullName(p))}${p.status !== 'active' ? ' <span class="muted">(inactive)</span>' : ''}${medFlag(p)}${balanceTag(p)}</span>
               <span class="att-btns">${Object.keys(STATUS).map((k) => `<button type="button" data-act="att-mark" data-id="${p.id}" data-s="${k}" class="${attDraft.attendance[p.id] === k ? 'on' : ''}" title="${STATUS[k].label}" aria-pressed="${attDraft.attendance[p.id] === k}">${k}</button>`).join('')}</span>
             </div>`).join('')}
           </div>
@@ -723,42 +800,61 @@
   views.payments = () => {
     const month = ui.payMonth || thisMonth();
     const per = state.settings.sessionsPerMonth;
-    const rows = activePlayers(ui.payGroup).map((p) => ({ p, fs: feeStatus(p, month), att: attendedInMonth(p.id, month) }));
-    const expected = sum(rows, (r) => r.fs.fee);
-    const paid = sum(rows, (r) => r.fs.paid);
+    const sumry = owingSummary(activePlayers(ui.payGroup));
+    const filters = {
+      '': () => true,
+      owing: (b) => b.balance < 0,
+      low: (b) => b.balance >= 0 && b.balance <= LOW_BALANCE,
+      ahead: (b) => b.balance > LOW_BALANCE,
+    };
+    const rows = sumry.rows.filter((r) => (filters[ui.payFilter] || filters[''])(r.b));
+    const f = monthFinance(month);
     const log = state.payments
-      .filter((x) => x.period === month && (!ui.payGroup || playerById(x.playerId)?.groupId === ui.payGroup))
+      .filter((x) => paymentMonth(x) === month && (!ui.payGroup || playerById(x.playerId)?.groupId === ui.payGroup))
       .sort((a, b) => b.date.localeCompare(a.date));
+    const lastPay = (id) => state.payments.filter((x) => x.playerId === id).sort((a, b) => b.date.localeCompare(a.date))[0];
     return `
       <div class="page-head"><h1>Fees</h1>
         <div class="toolbar">
-          <input id="pay-month" type="month" data-ui="payMonth" value="${month}" aria-label="Month">
           <select id="pay-group" data-ui="payGroup" aria-label="Group">${groupOptions(ui.payGroup, true)}</select>
           <button class="primary" data-act="new-payment">Record payment</button>
         </div>
       </div>
-      <p class="muted tight">${money(state.settings.monthlyFee)} per player per month, covering ${per} sessions (${money(state.settings.monthlyFee / per)} a session).</p>
-      <div class="stats three">
-        ${stat('Expected', money(expected), esc(fmtMonth(month)))}
-        ${stat('Collected', money(paid), `${expected ? pct(paid / expected) : '—'} of expected`, 'good')}
-        ${stat('Outstanding', money(sum(rows, (r) => r.fs.due)), `${rows.filter((r) => r.fs.due > 0).length} players`, sum(rows, (r) => r.fs.due) ? 'warn' : '')}
+      <p class="muted tight">${money(state.settings.monthlyFee)} buys ${per} sessions (${money(sessionPrice())} a session). Each session a player attends uses one${state.settings.chargeAbsences ? ', and so does an unexcused absence' : ''}. A negative balance means they owe.</p>
+      <div class="stats">
+        ${stat('Players owing', sumry.owingCount, `${fmtSessions(sumry.owedSessions)} in total`, sumry.owingCount ? 'bad' : '')}
+        ${stat('Amount owed', money(sumry.owedAmount), `at ${money(sessionPrice())} a session`, sumry.owedAmount ? 'bad' : '')}
+        ${stat('Prepaid', fmtSessions(sumry.prepaidSessions), `worth ${money(sumry.prepaidSessions * sessionPrice())}`)}
+        ${stat('Collected', money(f.collected), `in ${esc(fmtMonth(month))}`, 'good')}
       </div>
-      <section class="card"><h2>Who has paid for ${esc(fmtMonth(month))}</h2>
+      <section class="card">
+        <div class="between"><h2>Session balances</h2>
+          <div class="toolbar seg" role="group" aria-label="Show">
+            ${[['', 'All'], ['owing', 'Owing'], ['low', `${LOW_BALANCE} or fewer left`], ['ahead', 'Paid ahead']].map(([k, label]) => `<button class="small ${ui.payFilter === k ? 'on' : ''}" data-act="pay-filter" data-f="${k}" aria-pressed="${ui.payFilter === k}">${label}</button>`).join('')}
+          </div>
+        </div>
         ${rows.length ? `<div class="table-wrap"><table>
-          <thead><tr><th>Player</th><th>Group</th><th class="num">Sessions</th><th class="num">Paid</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows.sort((a, b) => b.fs.due - a.fs.due || fullName(a.p).localeCompare(fullName(b.p))).map(({ p, fs, att }) => `<tr>
-            <td>${esc(fullName(p))}</td><td>${groupChip(groupById(p.groupId))}</td>
-            <td class="num">${att} / ${per}</td>
-            <td class="num">${money(fs.paid)}</td><td>${feeBadge(fs)}</td>
-            <td class="actions">${fs.due > 0 ? `<button class="small" data-act="new-payment" data-id="${p.id}">Record</button>` : ''}</td>
-          </tr>`).join('')}</tbody></table></div>` : '<p class="empty">No active players.</p>'}
+          <thead><tr><th>Player</th><th>Group</th><th class="num hide-sm">Paid for</th><th class="num hide-sm">Used</th><th>Balance</th><th class="num">Owes</th><th class="hide-sm">Last paid</th><th></th></tr></thead>
+          <tbody>${rows.sort((a, b) => a.b.balance - b.b.balance || fullName(a.p).localeCompare(fullName(b.p))).map(({ p, b }) => {
+            const lp = lastPay(p.id);
+            return `<tr>
+            <td><button class="link" data-act="view-player" data-id="${p.id}">${esc(fullName(p))}</button></td><td>${groupChip(groupById(p.groupId))}</td>
+            <td class="num hide-sm">${round1(b.bought + b.opening)}</td>
+            <td class="num hide-sm">${b.used}</td>
+            <td>${balanceBadge(b)}</td>
+            <td class="num ${b.owed ? 'neg' : 'muted'}">${b.owed ? money(b.owed) : '—'}</td>
+            <td class="hide-sm muted">${lp ? fmtDate(lp.date) : 'Never'}</td>
+            <td class="actions"><button class="small" data-act="new-payment" data-id="${p.id}">Record</button></td>
+          </tr>`;
+          }).join('')}</tbody></table></div>` : `<p class="empty">${sumry.rows.length ? 'No players match this filter.' : 'No active players.'}</p>`}
       </section>
-      <section class="card"><h2>Payments received</h2>
+      <div class="between"><h2 class="flush">Payments received</h2><input id="pay-month" type="month" data-ui="payMonth" value="${month}" aria-label="Month"></div>
+      <section class="card">
         ${log.length ? `<div class="table-wrap"><table>
-          <thead><tr><th>Date</th><th>Player</th><th>Method</th><th class="hide-sm">Recorded by</th><th class="hide-sm">Note</th><th class="num">Amount</th><th></th></tr></thead>
+          <thead><tr><th>Date</th><th>Player</th><th class="num">Sessions</th><th class="hide-sm">Method</th><th class="hide-sm">Recorded by</th><th class="hide-sm">Note</th><th class="num">Amount</th><th></th></tr></thead>
           <tbody>${log.map((x) => {
             const p = playerById(x.playerId);
-            return `<tr><td>${fmtDate(x.date)}</td><td>${p ? esc(fullName(p)) : '<span class="muted">Deleted player</span>'}</td><td>${esc(x.method)}</td>
+            return `<tr><td>${fmtDate(x.date)}</td><td>${p ? esc(fullName(p)) : '<span class="muted">Deleted player</span>'}</td><td class="num">${round1(paymentSessions(x))}</td><td class="hide-sm">${esc(x.method)}</td>
               <td class="hide-sm muted">${esc(coachName(x.by))}</td><td class="hide-sm">${esc(x.note)}</td><td class="num">${money(x.amount)}</td>
               <td class="actions"><button class="small danger" data-act="delete-payment" data-id="${x.id}">Delete</button></td></tr>`;
           }).join('')}</tbody></table></div>` : '<p class="empty">No payments recorded for this month yet.</p>'}
@@ -820,12 +916,11 @@
       <div class="page-head"><h1>Reports</h1></div>
       <section class="card"><div class="between"><h2>Money, last 6 months</h2><button class="small" data-act="export-finance">Export CSV</button></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Month</th><th class="num">Fees expected</th><th class="num">Collected</th><th class="num">Expenses</th><th class="num">Net</th></tr></thead>
+          <thead><tr><th>Month</th><th class="num">Sessions paid for</th><th class="num">Fees collected</th><th class="num">Expenses</th><th class="num">Net</th></tr></thead>
           <tbody>${months.map((m) => {
             const f = monthFinance(m);
-            return `<tr><td>${esc(fmtMonth(m))}</td><td class="num">${money(f.expected)}</td><td class="num">${money(f.collected)}</td><td class="num">${money(f.spent)}</td><td class="num ${f.net < 0 ? 'neg' : ''}">${money(f.net)}</td></tr>`;
+            return `<tr><td>${esc(fmtMonth(m))}</td><td class="num">${f.sessionsSold}</td><td class="num">${money(f.collected)}</td><td class="num">${money(f.spent)}</td><td class="num ${f.net < 0 ? 'neg' : ''}">${money(f.net)}</td></tr>`;
           }).join('')}</tbody></table></div>
-        <p class="hint">Expected fees use the current player list, so past months are estimates.</p>
       </section>
       <section class="card">
         <div class="between"><h2>Attendance by player</h2><button class="small" data-act="export-report">Export CSV</button></div>
@@ -858,6 +953,8 @@
         <div class="field"><label for="set-currency">Currency symbol</label><input id="set-currency" value="${esc(state.settings.currency)}" maxlength="4"></div>
         <div class="field"><label for="set-fee">Monthly fee per player</label><input id="set-fee" type="number" min="0" step="any" value="${state.settings.monthlyFee}"></div>
         <div class="field"><label for="set-per">Sessions per month</label><input id="set-per" type="number" min="1" max="31" value="${state.settings.sessionsPerMonth}"></div>
+        <label class="check full" for="set-absent"><input id="set-absent" type="checkbox" ${state.settings.chargeAbsences ? 'checked' : ''}> Unexcused absences use up a paid session</label>
+        <p class="hint full">Present and late always use a session. Excused absences never do. Changing these settings recalculates every player's balance; sessions already paid for stay as recorded.</p>
       </div>
       <div class="toolbar"><button class="primary" data-act="save-settings">Save</button></div>
     </section>
@@ -891,7 +988,7 @@
 
   // ---------- Actions ----------
   // Actions that only read data; everything else changes data and needs edit access.
-  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att']);
+  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att', 'pay-filter']);
 
   const actions = {
     'new-player': () => editPlayer(),
@@ -936,6 +1033,7 @@
     },
     'att-open': (el) => { ui.attDate = el.dataset.date; attDraft = null; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
     'new-payment': (el) => addPayment(el.dataset.id),
+    'pay-filter': (el) => { ui.payFilter = el.dataset.f; render(); },
     'delete-payment': async (el) => {
       const x = state.payments.find((p) => p.id === el.dataset.id);
       if (!x || !(await ask(`Delete this ${money(x.amount)} payment?`, { ok: 'Delete', danger: true }))) return;
@@ -951,10 +1049,11 @@
       render();
     },
     'export-players': () => {
-      const rows = [['First name', 'Last name', 'Date of birth', 'Age', 'Group', 'Guardian', 'Phone', 'Email', 'Address', 'Medical', 'Registered', 'Status', 'Attendance %', 'Notes']];
+      const rows = [['First name', 'Last name', 'Date of birth', 'Age', 'Group', 'Guardian', 'Phone', 'Email', 'Address', 'Medical', 'Registered', 'Status', 'Attendance %', 'Session balance', 'Amount owed', 'Notes']];
       state.players.forEach((p) => {
         const a = playerAttendance(p.id);
-        rows.push([p.firstName, p.lastName, p.dob, ageOn(p.dob), groupById(p.groupId)?.name, p.guardianName, p.phone, p.email, p.address, p.medical, p.joined, p.status, a.rate == null ? '' : Math.round(a.rate * 100), p.notes]);
+        const b = playerBalance(p);
+        rows.push([p.firstName, p.lastName, p.dob, ageOn(p.dob), groupById(p.groupId)?.name, p.guardianName, p.phone, p.email, p.address, p.medical, p.joined, p.status, a.rate == null ? '' : Math.round(a.rate * 100), b.balance, Math.round(b.owed), p.notes]);
       });
       saveFile(`players-${isoDate()}.csv`, toCSV(rows), 'text/csv');
     },
@@ -971,10 +1070,10 @@
       saveFile(`expenses-${month}.csv`, toCSV(rows), 'text/csv');
     },
     'export-finance': () => {
-      const rows = [['Month', 'Fees expected', 'Collected', 'Expenses', 'Net']];
+      const rows = [['Month', 'Sessions paid for', 'Fees collected', 'Expenses', 'Net']];
       Array.from({ length: 12 }, (_, i) => monthsBack(i)).forEach((m) => {
         const f = monthFinance(m);
-        rows.push([m, f.expected, f.collected, f.spent, f.net]);
+        rows.push([m, f.sessionsSold, f.collected, f.spent, f.net]);
       });
       saveFile(`finance-${isoDate()}.csv`, toCSV(rows), 'text/csv');
     },
@@ -994,6 +1093,7 @@
         currency: $('#set-currency').value,
         monthlyFee: fee,
         sessionsPerMonth: per,
+        chargeAbsences: $('#set-absent').checked,
       };
       await Store.putSettings().then(() => toast('Settings saved'), () => {});
       render();
@@ -1066,12 +1166,16 @@
         s.sessions.push({ id: `${g.id}_${isoDate(date)}`, groupId: g.id, date: isoDate(date), type: 'Training', notes: '', attendance, updatedAt: date.getTime() });
       }
     });
+    // Mix of payers: monthly, three months up front, behind on payments, and a carried-over debt.
     const fee = s.settings.monthlyFee;
-    [thisMonth(), monthsBack(1)].forEach((month, mi) => {
-      s.players.forEach((p, i) => {
-        if (mi === 0 && i % 5 === 4) return; // a few unpaid this month
-        s.payments.push({ id: `demo-pay${mi}-${i}`, playerId: p.id, amount: mi === 0 && i % 7 === 0 ? fee / 2 : fee, period: month, date: month + '-0' + (1 + (i % 7)), method: i % 2 ? 'Cash' : 'Bank transfer', note: '' });
-      });
+    const per = s.settings.sessionsPerMonth;
+    const daysAgo = (d) => isoDate(new Date(now - d * 864e5));
+    s.players.forEach((p, i) => {
+      const pay = (k, months, d, note = '') => s.payments.push({ id: `demo-pay${i}-${k}`, playerId: p.id, amount: fee * months, sessions: per * months, date: daysAgo(d), period: daysAgo(d).slice(0, 7), method: i % 2 ? 'Cash' : 'Bank transfer', note });
+      if (i % 6 === 0) pay(0, 3, 40, 'Three months up front');
+      else if (i % 6 === 5) pay(0, 1, 40); // behind: only one month paid
+      else { pay(0, 1, 40); pay(1, 1, 1 + (i % 4)); }
+      if (i % 11 === 2) p.openingBalance = -3; // owed from before the app
     });
     [
       ['Pitch rental', 'Pitch hire for the month', 300000, '03'],
