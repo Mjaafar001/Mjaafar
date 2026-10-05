@@ -10,7 +10,7 @@
 
   const STORAGE_KEY = 'academy-manager-v2';
   const LEGACY_KEY = 'academy-manager-v1';
-  const COLLECTIONS = ['groups', 'players', 'sessions', 'payments', 'expenses'];
+  const COLLECTIONS = ['groups', 'players', 'sessions', 'payments', 'expenses', 'staff', 'staffAttendance'];
   const STATUS = {
     P: { label: 'Present' },
     L: { label: 'Late' },
@@ -104,7 +104,7 @@
     ];
   }
   function defaultState() {
-    return { settings: defaultSettings(), brand: { name: '', logo: '' }, groups: defaultGroups(), players: [], sessions: [], payments: [], expenses: [] };
+    return { settings: defaultSettings(), brand: { name: '', logo: '' }, groups: defaultGroups(), players: [], sessions: [], payments: [], expenses: [], staff: [], staffAttendance: [] };
   }
 
   function normalize(data) {
@@ -838,6 +838,7 @@
     attGroup: '', attDate: isoDate(),
     payMonth: thisMonth(), payGroup: '', payFilter: '',
     expMonth: thisMonth(), expCat: '',
+    staffDate: isoDate(), staffShowInactive: false,
     repFrom: '', repTo: '', repGroup: '',
   };
 
@@ -1094,6 +1095,134 @@
       </section>`;
   };
 
+  // ---------- Staff ----------
+  const STAFF_ROLES = ['Head coach', 'Assistant coach', 'Goalkeeper coach', 'Fitness coach', 'Administrator', 'Groundsman', 'Kit manager', 'Other'];
+  const STAFF_STATUS = {
+    P: { label: 'Present' },
+    L: { label: 'Late' },
+    O: { label: 'On leave' },
+    A: { label: 'Absent' },
+  };
+  const staffById = (id) => state.staff.find((x) => x.id === id);
+  const activeStaff = () => state.staff.filter((x) => x.status !== 'inactive').sort((a, b) => a.name.localeCompare(b.name));
+
+  // Days present/late/absent/on leave for one staff member in a month.
+  function staffMonth(staffId, month) {
+    const c = { P: 0, L: 0, A: 0, O: 0 };
+    state.staffAttendance.filter((d) => d.date?.startsWith(month)).forEach((d) => {
+      const m = d.marks?.[staffId];
+      if (m) c[m]++;
+    });
+    const counted = c.P + c.L + c.A;
+    return { ...c, rate: counted ? (c.P + c.L) / counted : null };
+  }
+
+  function editStaff(id) {
+    const x = id ? staffById(id) : null;
+    const v = x || { name: '', role: 'Assistant coach', phone: '', email: '', groups: [], started: isoDate(), status: 'active', notes: '' };
+    openModal(`
+      <h2>${x ? 'Edit staff member' : 'Add staff member'}</h2>
+      <div class="form-grid">
+        <div class="field full"><label for="s-name">Full name *</label><input id="s-name" name="name" required value="${esc(v.name)}"></div>
+        <div class="field"><label for="s-role">Role *</label><select id="s-role" name="role" required>${STAFF_ROLES.map((r) => `<option ${r === v.role ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+        <div class="field"><label for="s-phone">Phone</label><input id="s-phone" type="tel" name="phone" value="${esc(v.phone)}"></div>
+        <div class="field"><label for="s-email">Email</label><input id="s-email" type="email" name="email" value="${esc(v.email)}"></div>
+        <div class="field"><label for="s-start">Start date</label><input id="s-start" type="date" name="started" value="${esc(v.started)}"></div>
+        <fieldset class="field full groups-pick"><legend>Age groups they work with</legend>
+          ${sortedGroups().map((g) => `<label class="check"><input type="checkbox" name="group-${g.id}" ${v.groups?.includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('')}
+        </fieldset>
+        <div class="field full"><label for="s-notes">Notes</label><textarea id="s-notes" name="notes" placeholder="Certificates, availability, emergency contact">${esc(v.notes)}</textarea></div>
+        <div class="field"><label for="s-status">Status</label><select id="s-status" name="status">
+          <option value="active" ${v.status !== 'inactive' ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${v.status === 'inactive' ? 'selected' : ''}>Inactive / left</option>
+        </select></div>
+      </div>
+      ${modalActions(x ? 'Save changes' : 'Add staff member')}
+    `, (data) => {
+      const groups = sortedGroups().filter((g) => data[`group-${g.id}`]).map((g) => g.id);
+      const rec = { ...(x || { id: uid() }), name: data.name.trim(), role: data.role, phone: data.phone, email: data.email, started: data.started, status: data.status, notes: data.notes, groups };
+      Store.put('staff', rec).then(() => toast(x ? 'Staff member updated' : `${rec.name} added`), () => {});
+      render();
+    });
+  }
+
+  let staffDraft = null;
+  function loadStaffDraft() {
+    if (staffDraft && staffDraft.date === ui.staffDate) return;
+    const existing = state.staffAttendance.find((d) => d.date === ui.staffDate);
+    staffDraft = existing ? clone(existing) : { id: ui.staffDate, date: ui.staffDate, marks: {}, notes: '' };
+  }
+  function syncStaffMeta() {
+    const n = $('#staff-notes');
+    if (staffDraft && n) staffDraft.notes = n.value;
+  }
+
+  views.staff = () => {
+    loadStaffDraft();
+    const month = ui.staffDate.slice(0, 7);
+    const roster = activeStaff();
+    const extra = Object.keys(staffDraft.marks).map(staffById).filter((x) => x && !roster.includes(x));
+    const list = [...roster, ...extra];
+    const saved = state.staffAttendance.find((d) => d.date === ui.staffDate);
+    const counts = { P: 0, L: 0, O: 0, A: 0 };
+    Object.values(staffDraft.marks).forEach((m) => counts[m]++);
+    const unmarked = list.filter((x) => !staffDraft.marks[x.id]).length;
+    const table = state.staff
+      .filter((x) => ui.staffShowInactive || x.status !== 'inactive')
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const daysLogged = state.staffAttendance.filter((d) => d.date?.startsWith(month)).length;
+    return `
+      <div class="page-head"><h1>Staff <span class="muted count">${roster.length}</span></h1>
+        <div class="toolbar">
+          <button data-act="export-staff">Export ${esc(shortMonth(month))} CSV</button>
+          <button class="primary" data-act="new-staff">Add staff member</button>
+        </div>
+      </div>
+      <section class="card">
+        <div class="between"><h2 class="flush">Staff attendance</h2>
+          <input id="staff-date" type="date" data-ui="staffDate" value="${ui.staffDate}" aria-label="Date"></div>
+        <p class="muted tight">${saved ? `Saved${saved.by ? ` by ${esc(coachName(saved.by))}` : ''} for ${fmtDate(ui.staffDate)}.` : `Not saved yet for ${fmtDate(ui.staffDate)}.`}</p>
+        ${list.length ? `
+          <div class="toolbar between">
+            <span class="tally"><span class="mark m-P">${counts.P} present</span><span class="mark m-L">${counts.L} late</span><span class="mark m-E">${counts.O} on leave</span><span class="mark m-A">${counts.A} absent</span>${unmarked ? `<span class="muted">${unmarked} unmarked</span>` : ''}</span>
+            <button class="small" data-act="staff-all">All present</button>
+          </div>
+          <div class="roster">${list.map((x) => `
+            <div class="att-row">
+              <span class="att-name"><strong>${esc(x.name)}</strong> <span class="muted small">${esc(x.role)}</span></span>
+              <span class="att-btns">${Object.keys(STAFF_STATUS).map((k) => `<button type="button" data-act="staff-mark" data-id="${x.id}" data-s="${k}" class="${staffDraft.marks[x.id] === k ? 'on' : ''}" title="${STAFF_STATUS[k].label}" aria-pressed="${staffDraft.marks[x.id] === k}">${k}</button>`).join('')}</span>
+            </div>`).join('')}
+          </div>
+          <p class="hint tight">P present · L late · O on leave or day off · A absent</p>
+          <div class="field"><label for="staff-notes">Notes for the day</label><textarea id="staff-notes" placeholder="Who covered which group, reasons for absence">${esc(staffDraft.notes)}</textarea></div>
+          <div class="toolbar end">
+            ${saved ? '<button class="danger" data-act="staff-delete-day">Delete this day</button>' : ''}
+            <button class="primary" data-act="staff-save">Save staff attendance</button>
+          </div>`
+        : '<p class="empty">No staff yet. Click Add staff member to add your coaches and other staff.</p>'}
+      </section>
+      <section class="card">
+        <div class="between"><h2 class="flush">Staff list · ${esc(fmtMonth(month))}</h2>
+          <label class="check small"><input type="checkbox" id="staff-inactive" ${ui.staffShowInactive ? 'checked' : ''}> Show inactive</label></div>
+        <p class="muted tight">${daysLogged} day${daysLogged === 1 ? '' : 's'} recorded this month.</p>
+        ${table.length ? `<div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Role</th><th class="hide-sm">Groups</th><th class="hide-sm">Phone</th><th class="num">Present</th><th class="num">Late</th><th class="num">Absent</th><th class="num">Leave</th><th class="num">Rate</th><th></th></tr></thead>
+          <tbody>${table.map((x) => {
+            const m = staffMonth(x.id, month);
+            return `<tr>
+              <td><strong>${esc(x.name)}</strong>${x.status === 'inactive' ? ' <span class="muted small">(inactive)</span>' : ''}</td>
+              <td>${esc(x.role)}</td>
+              <td class="hide-sm">${(x.groups || []).map((gid) => groupChip(groupById(gid))).join(' ') || '<span class="muted">—</span>'}</td>
+              <td class="hide-sm nowrap">${esc(x.phone)}</td>
+              <td class="num">${m.P}</td><td class="num">${m.L}</td><td class="num">${m.A}</td><td class="num">${m.O}</td>
+              <td class="num">${pct(m.rate)}</td>
+              <td class="actions"><button class="small" data-act="edit-staff" data-id="${x.id}">Edit</button>
+                <button class="small danger" data-act="delete-staff" data-id="${x.id}">Delete</button></td>
+            </tr>`;
+          }).join('')}</tbody></table></div>` : '<p class="empty">No staff to show.</p>'}
+      </section>`;
+  };
+
   views.expenses = () => {
     const month = ui.expMonth || thisMonth();
     const inMonth = state.expenses.filter((x) => x.date?.startsWith(month));
@@ -1233,7 +1362,7 @@
 
   // ---------- Actions ----------
   // Actions that only read data; everything else changes data and needs edit access.
-  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att', 'pay-filter', 'remind-all']);
+  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att', 'pay-filter', 'remind-all', 'staff-mark', 'staff-all', 'export-staff']);
 
   const actions = {
     'new-player': () => editPlayer(),
@@ -1295,6 +1424,58 @@
       if (!x || !(await ask(`Delete this ${money(x.amount)} payment?`, { ok: 'Delete', danger: true }))) return;
       await Store.remove('payments', x.id).then(() => toast('Payment deleted'), () => {});
       render();
+    },
+    'new-staff': () => editStaff(),
+    'edit-staff': (el) => editStaff(el.dataset.id),
+    'delete-staff': async (el) => {
+      const x = staffById(el.dataset.id);
+      if (!x || !(await ask(`Delete ${x.name}? Their attendance marks are removed too. To keep their history, edit them and set Status to Inactive instead.`, { ok: 'Delete', danger: true }))) return;
+      try {
+        for (const d of state.staffAttendance.filter((d) => d.marks?.[x.id])) {
+          const next = clone(d);
+          delete next.marks[x.id];
+          await Store.put('staffAttendance', next);
+        }
+        await Store.remove('staff', x.id);
+        staffDraft = null;
+        toast('Staff member deleted');
+      } catch (e) { /* reported */ }
+      render();
+    },
+    'staff-mark': (el) => {
+      const { id, s } = el.dataset;
+      if (staffDraft.marks[id] === s) delete staffDraft.marks[id];
+      else staffDraft.marks[id] = s;
+      render();
+    },
+    'staff-all': () => { activeStaff().forEach((x) => (staffDraft.marks[x.id] = 'P')); render(); },
+    'staff-save': async () => {
+      syncStaffMeta();
+      if (!Object.keys(staffDraft.marks).length) return notify('Mark at least one staff member before saving.');
+      const rec = { ...staffDraft, updatedAt: Date.now(), by: Store.me.id || null };
+      try {
+        await Store.put('staffAttendance', rec);
+        staffDraft = null;
+        toast('Staff attendance saved');
+      } catch (e) { /* reported */ }
+      render();
+    },
+    'staff-delete-day': async () => {
+      if (!(await ask(`Delete staff attendance for ${fmtDate(ui.staffDate)}?`, { ok: 'Delete', danger: true }))) return;
+      staffDraft = null;
+      await Store.remove('staffAttendance', ui.staffDate).then(() => toast('Day deleted'), () => {});
+      render();
+    },
+    'export-staff': () => {
+      const month = ui.staffDate.slice(0, 7);
+      const days = state.staffAttendance.filter((d) => d.date?.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date));
+      const people = state.staff.filter((x) => x.status !== 'inactive' || days.some((d) => d.marks?.[x.id])).sort((a, b) => a.name.localeCompare(b.name));
+      const rows = [['Name', 'Role', 'Phone', ...days.map((d) => d.date), 'Present', 'Late', 'Absent', 'On leave']];
+      people.forEach((x) => {
+        const m = staffMonth(x.id, month);
+        rows.push([x.name, x.role, x.phone, ...days.map((d) => d.marks?.[x.id] || ''), m.P, m.L, m.A, m.O]);
+      });
+      saveFile(`staff-attendance-${month}.csv`, toCSV(rows), 'text/csv');
     },
     'new-expense': () => editExpense(),
     'edit-expense': (el) => editExpense(el.dataset.id),
@@ -1475,6 +1656,7 @@
   function render() {
     const route = currentRoute();
     if (route === 'attendance') syncAttMeta();
+    if (route === 'staff') syncStaffMeta();
     paintBrand();
     $$('#tabs a').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
     const who = $('#who');
@@ -1543,6 +1725,7 @@
   document.addEventListener('change', async (e) => {
     const key = e.target.dataset?.ui;
     if (key) {
+      if (key === 'staffDate') staffDraft = null;
       if (key === 'attGroup' || key === 'attDate') {
         if (!e.target.value) return;
         attDraft = null;
@@ -1550,6 +1733,10 @@
       ui[key] = e.target.value;
       render();
       return;
+    }
+    if (e.target.id === 'staff-inactive') {
+      ui.staffShowInactive = e.target.checked;
+      return render();
     }
     if (e.target.id === 'logo-file') {
       const file = e.target.files[0];

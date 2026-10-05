@@ -20,6 +20,7 @@ A web app for running a football academy with three age groups. Coaches share on
 - **Parents**: two ways for families to see sessions left.
   - *WhatsApp*: each player has a "Send balance on WhatsApp" button with the message filled in. The Fees page has a "Remind" button for players who are low or owing, and a "Message parents who owe" list.
   - *Parent code*: create a private code for a player and send it to the parent. The parent opens the app link (invited from the Share menu as a **viewer**) and enters the code. They see only their child's balance, money owed and recent attendance, which update live. Player records stay readable by coaches only. Each child's summary is stored encrypted with that child's code, so a parent can't read other children's details.
+- **Staff**: a list of coaches and other staff (role, phone, age groups they work with) and a daily staff register: present, late, on leave or absent, with notes. Each person's monthly totals and attendance rate are shown, and you can export the month to CSV.
 - **Expenses**: pitch hire, equipment, kits, coach pay, transport and other costs. View them by month and category, and see net income. Export to CSV.
 - **Reports**: income, expenses and net for the last 6 months, and attendance per player for any date range.
 - **Settings**: upload the academy logo (shown to coaches and parents), the academy name, fee, sessions per month, and the age groups' names, age ranges and training times. You can also back up and restore your data.
