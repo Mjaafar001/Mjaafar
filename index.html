@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Football Academy Manager</title>
+  <title>MJ Football Academy</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2313804f%22/><rect x=%225%22 y=%227%22 width=%2222%22 height=%2218%22 fill=%22none%22 stroke=%22white%22 stroke-width=%222%22/><path d=%22M16 7v18%22 stroke=%22white%22 stroke-width=%222%22/><circle cx=%2216%22 cy=%2216%22 r=%223.5%22 fill=%22none%22 stroke=%22white%22 stroke-width=%222%22/></svg>">
   <!-- build:head -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,8 +15,9 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><rect x="5" y="7" width="22" height="18" fill="none" stroke="var(--on-accent)" stroke-width="2"/><path d="M16 7v18" stroke="var(--on-accent)" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="none" stroke="var(--on-accent)" stroke-width="2"/></svg>
-      <span id="academy-name">Football Academy</span>
+      <img id="brand-logo" class="logo-img" alt="" hidden>
+      <svg id="default-logo" class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><rect x="5" y="7" width="22" height="18" fill="none" stroke="var(--on-accent)" stroke-width="2"/><path d="M16 7v18" stroke="var(--on-accent)" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="none" stroke="var(--on-accent)" stroke-width="2"/></svg>
+      <span id="academy-name">MJ Football Academy</span>
       <span id="who" class="who" hidden></span>
     </div>
     <nav class="tabs" id="tabs" aria-label="Sections">

@@ -356,3 +356,9 @@ body.parent-mode .container { max-width: 640px; }
 .balance-big.bad { color: var(--bad); }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .small-pad { padding: 24px 0; }
+
+/* Logo */
+.logo-img { width: 34px; height: 34px; object-fit: contain; flex: none; border-radius: 6px; }
+.logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.logo-preview { width: 88px; height: 88px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 10px; background: var(--sunk); overflow: hidden; }
+.logo-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }

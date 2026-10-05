@@ -1,4 +1,4 @@
-# Football Academy Manager
+# MJ Football Academy
 
 A web app for running a football academy with three age groups. Coaches share one set of data, live. Use it to register players, take attendance, track the monthly fee (₦50,000 for 8 sessions), record expenses and pull reports.
 
@@ -22,7 +22,7 @@ A web app for running a football academy with three age groups. Coaches share on
   - *Parent code*: create a private code for a player and send it to the parent. The parent opens the app link (invited from the Share menu as a **viewer**) and enters the code. They see only their child's balance, money owed and recent attendance, which update live. Player records stay readable by coaches only. Each child's summary is stored encrypted with that child's code, so a parent can't read other children's details.
 - **Expenses**: pitch hire, equipment, kits, coach pay, transport and other costs. View them by month and category, and see net income. Export to CSV.
 - **Reports**: income, expenses and net for the last 6 months, and attendance per player for any date range.
-- **Settings**: the academy name, fee, sessions per month, and the age groups' names, age ranges and training times. You can also back up and restore your data.
+- **Settings**: upload the academy logo (shown to coaches and parents), the academy name, fee, sessions per month, and the age groups' names, age ranges and training times. You can also back up and restore your data.
 
 ## Development
 

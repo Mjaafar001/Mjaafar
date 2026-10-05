@@ -94,7 +94,7 @@
 
   // ---------- State ----------
   function defaultSettings() {
-    return { academyName: 'Football Academy', currency: '₦', monthlyFee: 50000, sessionsPerMonth: 8, chargeAbsences: false };
+    return { academyName: 'MJ Football Academy', currency: '₦', monthlyFee: 50000, sessionsPerMonth: 8, chargeAbsences: false };
   }
   function defaultGroups() {
     return [
@@ -104,11 +104,11 @@
     ];
   }
   function defaultState() {
-    return { settings: defaultSettings(), groups: defaultGroups(), players: [], sessions: [], payments: [], expenses: [] };
+    return { settings: defaultSettings(), brand: { name: '', logo: '' }, groups: defaultGroups(), players: [], sessions: [], payments: [], expenses: [] };
   }
 
   function normalize(data) {
-    const s = { ...defaultState(), ...data, settings: { ...defaultSettings(), ...(data.settings || {}) } };
+    const s = { ...defaultState(), ...data, settings: { ...defaultSettings(), ...(data.settings || {}) }, brand: { name: '', logo: '', ...(data.brand || {}) } };
     COLLECTIONS.forEach((c) => { if (!Array.isArray(s[c])) s[c] = []; });
     if (!s.groups.length) s.groups = defaultGroups();
     return s;
@@ -198,6 +198,17 @@
       }
     },
 
+    // Name and logo live in brand/main, which parents can read too.
+    async putBrand() {
+      if (this.mode !== 'cloud') return saveLocal();
+      try {
+        await this.db.doc('brand/main').set(clone(state.brand));
+      } catch (e) {
+        writeFailed(e);
+        throw e;
+      }
+    },
+
     // Replace everything (restore, demo, erase).
     async replaceAll(next) {
       next = normalize(clone(next));
@@ -222,6 +233,7 @@
       }
       state.settings = next.settings;
       await this.db.doc('config/settings').set(next.settings);
+      if (next.brand.name || next.brand.logo) await this.db.doc('brand/main').set(next.brand);
       scheduleFamilySync();
     },
   };
@@ -423,6 +435,43 @@
     } catch (e) {
       notify(text);
     }
+  }
+
+  // ---------- Logo ----------
+  // Shrink an uploaded logo to at most 256px so it fits comfortably in the database.
+  function logoToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, 256 / Math.max(img.naturalWidth || 256, img.naturalHeight || 256));
+        const w = Math.max(1, Math.round((img.naturalWidth || 256) * scale));
+        const h = Math.max(1, Math.round((img.naturalHeight || 256) * scale));
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        let data = c.toDataURL('image/png');
+        if (data.length > 150000) data = c.toDataURL('image/webp', 0.9);
+        resolve(data);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('that file is not an image this browser can read')); };
+      img.src = url;
+    });
+  }
+
+  function paintBrand() {
+    const name = Store.mode === 'parent' ? (state.brand.name || 'Parent view') : state.settings.academyName;
+    $('#academy-name').textContent = name;
+    document.title = name;
+    const logo = state.brand.logo;
+    const img = $('#brand-logo');
+    img.hidden = !logo;
+    if (logo && img.getAttribute('src') !== logo) img.src = logo;
+    $('#default-logo').style.display = logo ? 'none' : '';
+    const icon = $('link[rel=icon]');
+    if (icon && logo) icon.href = logo;
   }
 
   // ---------- Lookups & calculations ----------
@@ -1131,6 +1180,16 @@
     const cloud = Store.mode === 'cloud';
     return `
     <div class="page-head"><h1>Settings</h1></div>
+    <section class="card"><h2>Logo</h2>
+      <div class="logo-row">
+        <div class="logo-preview">${state.brand.logo ? `<img src="${esc(state.brand.logo)}" alt="Academy logo">` : '<span class="muted small">No logo</span>'}</div>
+        <div class="toolbar">
+          <label class="btn" for="logo-file">${state.brand.logo ? 'Change logo' : 'Upload logo'}</label><input type="file" accept="image/*" id="logo-file" hidden>
+          ${state.brand.logo ? '<button class="danger" data-act="remove-logo">Remove</button>' : ''}
+        </div>
+      </div>
+      <p class="hint tight">PNG, JPG or SVG. A square logo on a transparent background looks best. It appears in the header for coaches and parents.</p>
+    </section>
     <section class="card"><h2>Academy and fees</h2>
       <div class="form-grid narrow">
         <div class="field"><label for="set-name">Academy name</label><input id="set-name" value="${esc(state.settings.academyName)}"></div>
@@ -1286,7 +1345,7 @@
       if (!(fee >= 0) || !(per >= 1)) return notify('Enter a fee of 0 or more and at least 1 session per month.');
       state.settings = {
         ...state.settings,
-        academyName: $('#set-name').value.trim() || 'Football Academy',
+        academyName: $('#set-name').value.trim() || 'MJ Football Academy',
         currency: $('#set-currency').value,
         monthlyFee: fee,
         sessionsPerMonth: per,
@@ -1294,6 +1353,16 @@
         appLink: $('#set-link').value.trim(),
       };
       await Store.putSettings().then(() => toast('Settings saved'), () => {});
+      if (state.brand.name !== state.settings.academyName) {
+        state.brand = { ...state.brand, name: state.settings.academyName };
+        await Store.putBrand().catch(() => {});
+      }
+      render();
+    },
+    'remove-logo': async () => {
+      if (!(await ask('Remove the academy logo?', { ok: 'Remove logo', danger: true }))) return;
+      state.brand = { ...state.brand, logo: '' };
+      await Store.putBrand().then(() => toast('Logo removed'), () => {});
       render();
     },
     'save-groups': async () => {
@@ -1406,8 +1475,7 @@
   function render() {
     const route = currentRoute();
     if (route === 'attendance') syncAttMeta();
-    $('#academy-name').textContent = Store.mode === 'parent' ? 'Parent view' : state.settings.academyName;
-    document.title = `${state.settings.academyName}`;
+    paintBrand();
     $$('#tabs a').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
     const who = $('#who');
     if (Store.mode === 'cloud') {
@@ -1483,6 +1551,22 @@
       render();
       return;
     }
+    if (e.target.id === 'logo-file') {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (Store.mode === 'cloud' && !Store.canWrite) return toast('You have view-only access.');
+      try {
+        const logo = await logoToDataUrl(file);
+        state.brand = { name: state.settings.academyName, logo };
+        await Store.putBrand();
+        toast('Logo saved');
+      } catch (err) {
+        if (err?.message) notify(`The logo could not be used: ${err.message}.`);
+      }
+      render();
+      return;
+    }
     if (e.target.id === 'restore-file') {
       const file = e.target.files[0];
       e.target.value = '';
@@ -1507,6 +1591,13 @@
   window.addEventListener('hashchange', render);
 
   // ---------- Boot ----------
+  function watchBrand(db, onError) {
+    db.doc('brand/main').onSnapshot((snap) => {
+      state.brand = { name: '', logo: '', ...(snap.exists ? clone(snap.data()) : {}) };
+      scheduleRender();
+    }, onError);
+  }
+
   async function connectCloud() {
     const claude = window.claude;
     const db = await claude.use('db');
@@ -1551,6 +1642,7 @@
       Store.loaded.add('settings');
       scheduleRender();
     }, onError);
+    watchBrand(db, onError);
     db.collection('familySync').onSnapshot((snap) => {
       familySync.docs = snap.docs.map((d) => ({ ...clone(d.data()), id: d.id }));
       if (!familySync.loaded) {
@@ -1592,6 +1684,7 @@
 
   function startParentMode(db) {
     Store.mode = 'parent';
+    watchBrand(db, () => {});
     document.body.classList.add('parent-mode');
     savedCodes().forEach(watchChild);
     render();
@@ -1627,7 +1720,7 @@
 
   views.parent = () => {
     const entries = [...parent.children.values()];
-    const academy = entries.find((e) => e.data)?.data.academy;
+    const academy = state.brand.name || entries.find((e) => e.data)?.data.academy;
     return `
       <div class="page-head"><h1>${academy ? esc(academy) : 'Your child’s sessions'}</h1></div>
       ${entries.map(childCard).join('')}
