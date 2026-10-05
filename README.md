@@ -1,26 +1,26 @@
 # Football Academy Manager
 
-A simple web app for running a football academy with three age groups. Use it to register players, take attendance, track monthly fees and pull attendance reports.
+A web app for running a football academy with three age groups. Coaches share one set of data, live. Use it to register players, take attendance, track the monthly fee (₦50,000 for 8 sessions), record expenses and pull reports.
 
-It's plain HTML, CSS and JavaScript with no install or build step and no server. It works offline and on phones.
+## Two ways to run it
 
-## Getting started
+**Shared, for all coaches (recommended).** The app is published as a claude.ai page with a shared database. Everyone you share it with sees the same players, registers, fees and expenses, and changes appear for everyone straight away. Registers, payments and expenses show which coach recorded them.
 
-Open `index.html` in any modern browser. Or host the folder on any static host (for example GitHub Pages) and open it on your phone at training.
+- To add a coach, open the page's **Share** menu and invite them by email with **edit** access. They need a claude.ai account.
+- People with view-only access can see the data but can't change anything.
 
-To try the app before adding real players, go to **Settings → Load demo data**.
+**Single device.** Open `index.html` in any browser. Data stays in that browser only.
 
 ## Features
 
-- **Dashboard**: active players, this month's attendance rate, fees collected and outstanding, a card for each age group, recent sessions, and players whose attendance has dropped (below 60% over the last 30 days).
-- **Players (registrations)**: name, date of birth, age group, parent or guardian, phone, email, address, medical info and notes. The app suggests an age group from the date of birth. You can search and filter, mark players inactive to keep their history, and export to CSV.
-- **Attendance**: pick a group and date, then mark each player as **P**resent, **L**ate, **E**xcused or **A**bsent. There are "All present" and "Unmarked → absent" shortcuts, and you can add session notes. You can reopen and edit past registers.
-- **Payments**: set a monthly fee for each group. Record payments by month, see who has paid, who has paid part, and who hasn't paid.
-- **Reports**: attendance for each player over any date range (last 30 or 90 days, or all time), filtered by group. You can export to CSV or print.
-- **Settings**: rename the three age groups (Under 8, Under 12 and Under 16 by default) and set their age ranges, training times, fees and colours. You can also change the academy name and currency, and back up or restore your data.
+- **Dashboard**: players, attendance, fees collected and outstanding, expenses, and the month's net. Each group gets a card showing sessions held against the 8 per month. It also lists players whose attendance has dropped (below 60% over the last 30 days).
+- **Players**: registration with date of birth (the app suggests an age group), parent or guardian, phone, medical info and notes. You can search, filter and export to CSV.
+- **Attendance**: tap P (present), L (late), E (excused) or A (absent) for each player, add session notes, and see "session N of 8" for the month. If two coaches edit the same register, the second to save is asked before replacing the first coach's version.
+- **Fees**: ₦50,000 a month per player, covering 8 sessions. The table shows who has paid in full, paid part, or not paid, plus sessions attended out of 8.
+- **Expenses**: pitch hire, equipment, kits, coach pay, transport and other costs. View them by month and category, and see net income. Export to CSV.
+- **Reports**: income, expenses and net for the last 6 months, and attendance per player for any date range.
+- **Settings**: the academy name, fee, sessions per month, and the age groups' names, age ranges and training times. You can also back up and restore your data.
 
-Excused absences don't count against a player's attendance rate.
+## Development
 
-## Your data
-
-Data is saved in the browser on the device you use (`localStorage`). It isn't shared between devices, and clearing your browser data deletes it. Use **Settings → Download backup** regularly. To move data to another device, restore the backup file there.
+The code is plain HTML, CSS and JS (`index.html`, `styles.css`, `app.js`). `scripts/build_artifact.py` bundles them into `dist/academy.html`, the version that gets published for coaches. In that published version, `app.js` uses the shared database; anywhere else it falls back to `localStorage`.
