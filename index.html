@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Academy Manager</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">⚽</span>
+      <span id="academy-name">Football Academy</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#dashboard" data-route="dashboard">Dashboard</a>
+      <a href="#players" data-route="players">Players</a>
+      <a href="#attendance" data-route="attendance">Attendance</a>
+      <a href="#payments" data-route="payments">Payments</a>
+      <a href="#reports" data-route="reports">Reports</a>
+      <a href="#settings" data-route="settings">Settings</a>
+    </nav>
+  </header>
+
+  <main id="view" class="container"></main>
+
+  <dialog id="modal">
+    <form method="dialog" id="modal-form"></form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
