@@ -17,6 +17,9 @@ A web app for running a football academy with three age groups. Coaches share on
 - **Players**: registration with date of birth (the app suggests an age group), parent or guardian, phone, medical info and notes. You can search, filter and export to CSV.
 - **Attendance**: tap P (present), L (late), E (excused) or A (absent) for each player, add session notes, and see "session N of 8" for the month. If two coaches edit the same register, the second to save is asked before replacing the first coach's version.
 - **Fees**: each player has a running balance of sessions. ₦50,000 buys 8 sessions (₦6,250 each). Payments add sessions; each session attended uses one. A balance below zero means the player owes, with the amount in naira. Paying 2 or 3 months up front adds 16 or 24 sessions. A starting balance on each player covers debts from before the app.
+- **Parents**: two ways for families to see sessions left.
+  - *WhatsApp*: each player has a "Send balance on WhatsApp" button with the message filled in. The Fees page has a "Remind" button for players who are low or owing, and a "Message parents who owe" list.
+  - *Parent code*: create a private code for a player and send it to the parent. The parent opens the app link (invited from the Share menu as a **viewer**) and enters the code. They see only their child's balance, money owed and recent attendance, which update live. Player records stay readable by coaches only. Each child's summary is stored encrypted with that child's code, so a parent can't read other children's details.
 - **Expenses**: pitch hire, equipment, kits, coach pay, transport and other costs. View them by month and category, and see net income. Export to CSV.
 - **Reports**: income, expenses and net for the last 6 months, and attendance per player for any date range.
 - **Settings**: the academy name, fee, sessions per month, and the age groups' names, age ranges and training times. You can also back up and restore your data.

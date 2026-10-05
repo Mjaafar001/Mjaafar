@@ -336,3 +336,23 @@ dialog.confirm p { margin: 0; }
 .check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); }
 h2.flush { margin: 0; }
+
+/* Parent access & WhatsApp */
+.small-btn { padding: 3px 10px; font-size: 13px; text-decoration: none; }
+.parent-box { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px; border-radius: 8px; background: var(--sunk); }
+.code, .code-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .08em; }
+.code-input { text-transform: uppercase; flex: 1; min-width: 0; max-width: 240px; font-size: 17px; }
+.remind-list { display: flex; flex-direction: column; margin-top: 10px; }
+.remind-row { padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: nowrap; }
+.bad-text { color: var(--bad); }
+body.parent-mode .tabs { display: none; }
+body.parent-mode .container { max-width: 640px; }
+.child { gap: 12px; }
+.balance-big { padding: 14px 16px; border-radius: 10px; border: 1px solid currentColor; }
+.balance-big .value { font-family: var(--font-display); font-size: 36px; font-weight: 700; line-height: 1.1; }
+.balance-big .sub { color: var(--fg); margin-top: 2px; }
+.balance-big.good { color: var(--good); }
+.balance-big.warn { color: var(--warn); }
+.balance-big.bad { color: var(--bad); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.small-pad { padding: 24px 0; }

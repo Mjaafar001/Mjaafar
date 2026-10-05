@@ -150,11 +150,13 @@
     me: { id: null, name: '' },
     canWrite: true,
     isOwner: true,
+    isCoach: true,
     loaded: new Set(),
     groupsSaved: false,
     notice: '',
 
     get ready() {
+      if (this.mode === 'parent') return true;
       return this.mode !== 'connecting' && (this.mode !== 'cloud' || this.loaded.size >= COLLECTIONS.length + 1);
     },
 
@@ -166,6 +168,7 @@
       if (this.mode !== 'cloud') return saveLocal();
       try {
         await this.db.collection(coll).doc(obj.id).set(obj);
+        scheduleFamilySync();
       } catch (e) {
         writeFailed(e);
         throw e;
@@ -177,6 +180,7 @@
       if (this.mode !== 'cloud') return saveLocal();
       try {
         await this.db.collection(coll).doc(id).delete();
+        scheduleFamilySync();
       } catch (e) {
         writeFailed(e);
         throw e;
@@ -187,6 +191,7 @@
       if (this.mode !== 'cloud') return saveLocal();
       try {
         await this.db.doc('config/settings').set(clone(state.settings));
+        scheduleFamilySync();
       } catch (e) {
         writeFailed(e);
         throw e;
@@ -217,6 +222,7 @@
       }
       state.settings = next.settings;
       await this.db.doc('config/settings').set(next.settings);
+      scheduleFamilySync();
     },
   };
 
@@ -268,6 +274,155 @@
     const ps = await Store.user.profiles(missing);
     missing.forEach((id) => { names[id] = ps[id]?.name || ''; });
     scheduleRender();
+  }
+
+  // ---------- Parent access ----------
+  // Each player can have a private parent code. For every coded player the coach's app writes a
+  // summary (balance, recent attendance) to family/<hash of code>, encrypted with a key derived from
+  // the code. Parents can read the family collection but only decrypt their own child's summary.
+  const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const te = new TextEncoder();
+  const td = new TextDecoder();
+  const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const normCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const fmtCode = (c) => normCode(c).replace(/^(.{5})(.+)$/, '$1-$2');
+
+  function newParentCode() {
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    return [...bytes].map((b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
+  }
+
+  const familyIdCache = new Map();
+  const familyKeyCache = new Map();
+  async function familyDocId(code) {
+    const c = normCode(code);
+    if (!familyIdCache.has(c)) familyIdCache.set(c, toHex(await crypto.subtle.digest('SHA-256', te.encode('academy-family:' + c))).slice(0, 40));
+    return familyIdCache.get(c);
+  }
+  async function familyKey(code) {
+    const c = normCode(code);
+    if (!familyKeyCache.has(c)) {
+      const base = await crypto.subtle.importKey('raw', te.encode(c), 'PBKDF2', false, ['deriveKey']);
+      const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: te.encode(await familyDocId(c)), iterations: 150000, hash: 'SHA-256' },
+        base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      familyKeyCache.set(c, key);
+    }
+    return familyKeyCache.get(c);
+  }
+  async function sealSummary(code, summary) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await familyKey(code), te.encode(JSON.stringify(summary)));
+    return { v: 1, iv: toB64(iv), ct: toB64(ct) };
+  }
+  async function openSummary(code, doc) {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(doc.iv) }, await familyKey(code), fromB64(doc.ct));
+    return JSON.parse(td.decode(pt));
+  }
+
+  function familySummary(p) {
+    const b = playerBalance(p);
+    const month = thisMonth();
+    const recent = state.sessions
+      .filter((s) => s.attendance?.[p.id])
+      .sort((a, b2) => b2.date.localeCompare(a.date))
+      .slice(0, 10)
+      .map((s) => ({ d: s.date, s: s.attendance[p.id], t: s.type }));
+    const lp = state.payments.filter((x) => x.playerId === p.id).sort((a, b2) => b2.date.localeCompare(a.date))[0];
+    return {
+      academy: state.settings.academyName,
+      currency: state.settings.currency,
+      fee: Number(state.settings.monthlyFee || 0),
+      perMonth: Number(state.settings.sessionsPerMonth || 0),
+      name: `${p.firstName} ${(p.lastName || '').slice(0, 1)}${p.lastName ? '.' : ''}`.trim(),
+      group: groupById(p.groupId)?.name || '',
+      active: p.status === 'active',
+      balance: b.balance,
+      owed: Math.round(b.owed),
+      attendedThisMonth: attendedInMonth(p.id, month),
+      month,
+      recent,
+      lastPayment: lp ? { date: lp.date, amount: Number(lp.amount || 0), sessions: round1(paymentSessions(lp)) } : null,
+    };
+  }
+
+  // Bring family/* in line with the players' current balances. Runs after coaches change data.
+  const familySync = { docs: [], loaded: false, running: false, again: false, timer: null };
+  function scheduleFamilySync(delay = 1200) {
+    if (Store.mode !== 'cloud' || !Store.isCoach) return;
+    clearTimeout(familySync.timer);
+    familySync.timer = setTimeout(runFamilySync, delay);
+  }
+  async function runFamilySync() {
+    if (!familySync.loaded || !Store.ready) return scheduleFamilySync();
+    if (familySync.running) { familySync.again = true; return; }
+    familySync.running = true;
+    try {
+      const db = Store.db;
+      const synced = new Map(familySync.docs.map((d) => [d.id, d]));
+      const wanted = new Set();
+      for (const p of state.players) {
+        if (!p.parentCode) continue;
+        wanted.add(p.id);
+        const docId = await familyDocId(p.parentCode);
+        const summary = familySummary(p);
+        const sig = toHex(await crypto.subtle.digest('SHA-256', te.encode(docId + JSON.stringify(summary))));
+        const prev = synced.get(p.id);
+        if (prev && prev.sig === sig && prev.docId === docId) continue;
+        if (prev && prev.docId !== docId) await db.collection('family').doc(prev.docId).delete();
+        await db.collection('family').doc(docId).set(await sealSummary(p.parentCode, { ...summary, updated: Date.now() }));
+        await db.collection('familySync').doc(p.id).set({ docId, sig });
+      }
+      for (const [pid, d] of synced) {
+        if (wanted.has(pid)) continue;
+        await db.collection('family').doc(d.docId).delete();
+        await db.collection('familySync').doc(pid).delete();
+      }
+    } catch (e) {
+      console.warn('Parent summaries not updated', e);
+    } finally {
+      familySync.running = false;
+      if (familySync.again) { familySync.again = false; scheduleFamilySync(300); }
+    }
+  }
+
+  // ---------- WhatsApp ----------
+  function waNumber(phone) {
+    let d = String(phone || '').replace(/[^\d+]/g, '');
+    if (d.startsWith('+')) return d.slice(1);
+    if (d.startsWith('00')) return d.slice(2);
+    if (d.startsWith('0') && d.length === 11) return '234' + d.slice(1); // Nigerian local format
+    return d;
+  }
+  const waLink = (phone, text) => `https://wa.me/${waNumber(phone)}?text=${encodeURIComponent(text)}`;
+
+  function balanceMessage(p) {
+    const b = playerBalance(p);
+    const hi = p.guardianName ? `Hello ${p.guardianName}, ` : 'Hello, ';
+    const who = p.firstName;
+    const month = attendedInMonth(p.id, thisMonth());
+    let line;
+    if (b.balance < 0) line = `${who} has attended ${fmtSessions(-b.balance)} more than paid for, so the balance owed is ${money(b.owed)}. Please pay to keep ${who} training.`;
+    else if (b.balance === 0) line = `${who} has used all paid sessions. Please renew (${money(state.settings.monthlyFee)} for ${state.settings.sessionsPerMonth} sessions) before the next session.`;
+    else line = `${who} has ${fmtSessions(b.balance)} left.`;
+    const so = month ? ` ${who} has attended ${fmtSessions(month)} so far this month.` : '';
+    return `${hi}this is ${state.settings.academyName}. ${line}${so} Thank you!`;
+  }
+
+  function codeMessage(p) {
+    const link = state.settings.appLink || '';
+    return `Hello${p.guardianName ? ' ' + p.guardianName : ''}, you can now check ${p.firstName}'s sessions left and attendance any time${link ? ` at ${link}` : ''}. Sign in with a free claude.ai account using the email we invited, then enter this code: ${fmtCode(p.parentCode)}. Please keep the code private.`;
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Message copied');
+    } catch (e) {
+      notify(text);
+    }
   }
 
   // ---------- Lookups & calculations ----------
@@ -495,10 +650,38 @@
       <h3>Attendance: ${pct(att.rate)}</h3>
       <p class="muted tight">${att.attended} attended · ${att.absent} absent · ${att.late} late · ${att.excused} excused</p>
       ${history.length ? `<div class="table-wrap"><table><tbody>${history.map((s) => `<tr><td>${fmtDate(s.date)}</td><td>${esc(s.type)}</td><td><span class="mark m-${s.attendance[id]}">${STATUS[s.attendance[id]].label}</span></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No sessions recorded yet.</p>'}
+      <h3>Parent</h3>
+      <div class="toolbar">
+        <a class="btn small-btn" href="${esc(waLink(p.phone, balanceMessage(p)))}" target="_blank" rel="noopener">Send balance on WhatsApp</a>
+        <button type="button" class="small" id="pv-copy">Copy balance message</button>
+      </div>
+      ${Store.mode === 'cloud' ? `<div class="parent-box">
+        ${p.parentCode
+          ? `<div>Parent code <strong class="code">${esc(fmtCode(p.parentCode))}</strong></div>
+             <p class="hint tight">The parent enters this code on the app to see ${esc(p.firstName)}'s sessions. Invite their email from the Share menu as a viewer first.</p>
+             <div class="toolbar">
+               <a class="btn small-btn" href="${esc(waLink(p.phone, codeMessage(p)))}" target="_blank" rel="noopener">Send code on WhatsApp</a>
+               <button type="button" class="small" id="pv-copy-code">Copy code message</button>
+               <button type="button" class="small danger" id="pv-new-code">Replace code</button>
+             </div>`
+          : `<p class="tight">Give the parent a private code so they can check ${esc(p.firstName)}'s sessions themselves.</p>
+             <div class="toolbar"><button type="button" class="small primary" id="pv-new-code">Create parent code</button></div>`}
+      </div>` : ''}
       <h3>Recent payments</h3>
       ${pays.length ? `<div class="table-wrap"><table><tbody>${pays.map((x) => `<tr><td>${fmtDate(x.date)}</td><td>${fmtSessions(paymentSessions(x))}</td><td class="num">${money(x.amount)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No payments recorded.</p>'}
       <div class="modal-actions"><button value="cancel">Close</button></div>
     `, () => {});
+    $('#pv-copy', modalForm)?.addEventListener('click', () => copyText(balanceMessage(p)));
+    $('#pv-copy-code', modalForm)?.addEventListener('click', () => copyText(codeMessage(p)));
+    $('#pv-new-code', modalForm)?.addEventListener('click', async () => {
+      if (!Store.canWrite) return toast('You have view-only access.');
+      if (p.parentCode && !(await ask(`Replace ${p.firstName}'s parent code? The old code stops working and you'll need to send the new one.`, { ok: 'Replace code', danger: true }))) return;
+      try {
+        await Store.put('players', { ...p, parentCode: newParentCode() });
+        toast('Parent code created');
+      } catch (e) { /* reported */ }
+      viewPlayer(id);
+    });
   }
 
   // ---------- Payments ----------
@@ -817,6 +1000,7 @@
       <div class="page-head"><h1>Fees</h1>
         <div class="toolbar">
           <select id="pay-group" data-ui="payGroup" aria-label="Group">${groupOptions(ui.payGroup, true)}</select>
+          ${sumry.owingCount ? '<button data-act="remind-all">Message parents who owe</button>' : ''}
           <button class="primary" data-act="new-payment">Record payment</button>
         </div>
       </div>
@@ -844,7 +1028,7 @@
             <td>${balanceBadge(b)}</td>
             <td class="num ${b.owed ? 'neg' : 'muted'}">${b.owed ? money(b.owed) : '—'}</td>
             <td class="hide-sm muted">${lp ? fmtDate(lp.date) : 'Never'}</td>
-            <td class="actions"><button class="small" data-act="new-payment" data-id="${p.id}">Record</button></td>
+            <td class="actions">${b.balance <= LOW_BALANCE ? `<a class="btn small-btn" href="${esc(waLink(p.phone, balanceMessage(p)))}" target="_blank" rel="noopener" title="Send balance to parent on WhatsApp">Remind</a> ` : ''}<button class="small" data-act="new-payment" data-id="${p.id}">Record</button></td>
           </tr>`;
           }).join('')}</tbody></table></div>` : `<p class="empty">${sumry.rows.length ? 'No players match this filter.' : 'No active players.'}</p>`}
       </section>
@@ -953,6 +1137,8 @@
         <div class="field"><label for="set-currency">Currency symbol</label><input id="set-currency" value="${esc(state.settings.currency)}" maxlength="4"></div>
         <div class="field"><label for="set-fee">Monthly fee per player</label><input id="set-fee" type="number" min="0" step="any" value="${state.settings.monthlyFee}"></div>
         <div class="field"><label for="set-per">Sessions per month</label><input id="set-per" type="number" min="1" max="31" value="${state.settings.sessionsPerMonth}"></div>
+        <div class="field full"><label for="set-link">App link for parents</label><input id="set-link" type="url" value="${esc(state.settings.appLink || '')}" placeholder="https://claude.ai/artifact/…">
+          <span class="hint">Included in the code message sent to parents.</span></div>
         <label class="check full" for="set-absent"><input id="set-absent" type="checkbox" ${state.settings.chargeAbsences ? 'checked' : ''}> Unexcused absences use up a paid session</label>
         <p class="hint full">Present and late always use a session. Excused absences never do. Changing these settings recalculates every player's balance; sessions already paid for stay as recorded.</p>
       </div>
@@ -988,7 +1174,7 @@
 
   // ---------- Actions ----------
   // Actions that only read data; everything else changes data and needs edit access.
-  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att', 'pay-filter']);
+  const READ_ONLY_ACTS = new Set(['view-player', 'att-open', 'att-mark', 'att-all', 'att-rest', 'rep-range', 'export-players', 'export-report', 'export-expenses', 'export-finance', 'backup', 'take-att', 'pay-filter', 'remind-all']);
 
   const actions = {
     'new-player': () => editPlayer(),
@@ -1034,6 +1220,17 @@
     'att-open': (el) => { ui.attDate = el.dataset.date; attDraft = null; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
     'new-payment': (el) => addPayment(el.dataset.id),
     'pay-filter': (el) => { ui.payFilter = el.dataset.f; render(); },
+    'remind-all': () => {
+      const rows = owingSummary(activePlayers(ui.payGroup)).rows.filter((r) => r.b.balance < 0).sort((a, b) => a.b.balance - b.b.balance);
+      openModal(`
+        <h2>Message parents who owe</h2>
+        <p class="muted tight">Tap each parent to open WhatsApp with their child's balance filled in, then press send.</p>
+        <div class="remind-list">${rows.map(({ p, b }) => `
+          <div class="between remind-row"><span><strong>${esc(fullName(p))}</strong> <span class="muted">${esc(p.guardianName || '')}${p.phone ? '' : ' · no phone saved'}</span><br>${balanceBadge(b)} <span class="muted">${money(b.owed)}</span></span>
+            <a class="btn small-btn" href="${esc(waLink(p.phone, balanceMessage(p)))}" target="_blank" rel="noopener">WhatsApp</a></div>`).join('')}
+        </div>
+        <div class="modal-actions"><button value="cancel">Done</button></div>`, () => {});
+    },
     'delete-payment': async (el) => {
       const x = state.payments.find((p) => p.id === el.dataset.id);
       if (!x || !(await ask(`Delete this ${money(x.amount)} payment?`, { ok: 'Delete', danger: true }))) return;
@@ -1094,6 +1291,7 @@
         monthlyFee: fee,
         sessionsPerMonth: per,
         chargeAbsences: $('#set-absent').checked,
+        appLink: $('#set-link').value.trim(),
       };
       await Store.putSettings().then(() => toast('Settings saved'), () => {});
       render();
@@ -1194,6 +1392,7 @@
 
   // ---------- Routing & rendering ----------
   function currentRoute() {
+    if (Store.mode === 'parent') return 'parent';
     const r = location.hash.slice(1);
     return views[r] ? r : 'dashboard';
   }
@@ -1207,7 +1406,7 @@
   function render() {
     const route = currentRoute();
     if (route === 'attendance') syncAttMeta();
-    $('#academy-name').textContent = state.settings.academyName;
+    $('#academy-name').textContent = Store.mode === 'parent' ? 'Parent view' : state.settings.academyName;
     document.title = `${state.settings.academyName}`;
     $$('#tabs a').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
     const who = $('#who');
@@ -1215,6 +1414,10 @@
       who.hidden = false;
       who.innerHTML = `<span class="dot live"></span>${Store.me.name ? esc(Store.me.name) : 'Shared'}`;
       who.title = 'Connected to the shared academy database';
+    } else if (Store.mode === 'parent') {
+      who.hidden = false;
+      who.innerHTML = `<span class="dot live"></span>${Store.me.name ? esc(Store.me.name) : 'Parent'}`;
+      who.title = 'Parent view';
     } else if (Store.mode === 'local') {
       who.hidden = false;
       who.innerHTML = '<span class="dot"></span>This device';
@@ -1321,11 +1524,14 @@
     Store.user = user;
     Store.downloads = downloads;
     if (user) {
-      const [me, canWrite, isOwner] = await Promise.all([user.me(), user.can('data.write'), user.isOwner()]);
+      const [me, canWrite, isOwner, canEdit] = await Promise.all([user.me(), user.can('data.write'), user.isOwner(), user.canEdit()]);
       Store.me = { id: me.id, name: me.name };
       Store.isOwner = isOwner;
       if (canWrite === false) Store.canWrite = false;
+      // Coaches are Editors; anyone else who opens the page is a parent.
+      Store.isCoach = isOwner || canEdit;
     }
+    if (!Store.isCoach) return startParentMode(db);
 
     const onError = (e) => {
       console.warn('Live updates stopped', e);
@@ -1345,7 +1551,119 @@
       Store.loaded.add('settings');
       scheduleRender();
     }, onError);
+    db.collection('familySync').onSnapshot((snap) => {
+      familySync.docs = snap.docs.map((d) => ({ ...clone(d.data()), id: d.id }));
+      if (!familySync.loaded) {
+        familySync.loaded = true;
+        scheduleFamilySync(2500); // catch up once after opening, e.g. after a settings change elsewhere
+      }
+    }, onError);
   }
+
+  // ---------- Parent mode ----------
+  const PARENT_KEY = 'academy-parent-codes';
+  const parent = { children: new Map(), adding: false, error: '' };
+
+  function savedCodes() {
+    try { return JSON.parse(localStorage.getItem(PARENT_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function storeCodes() {
+    try { localStorage.setItem(PARENT_KEY, JSON.stringify([...parent.children.keys()])); } catch (e) { /* convenience only */ }
+  }
+
+  async function watchChild(code) {
+    const c = normCode(code);
+    if (parent.children.has(c)) return true;
+    const entry = { code: c, status: 'loading', data: null, unsub: null };
+    parent.children.set(c, entry);
+    const docId = await familyDocId(c);
+    entry.unsub = Store.db.collection('family').doc(docId).onSnapshot(async (snap) => {
+      if (!snap.exists) { entry.status = 'missing'; scheduleRender(); return; }
+      try {
+        entry.data = await openSummary(c, snap.data());
+        entry.status = 'ok';
+      } catch (e) {
+        entry.status = 'missing';
+      }
+      scheduleRender();
+    }, () => { entry.status = 'error'; scheduleRender(); });
+    return true;
+  }
+
+  function startParentMode(db) {
+    Store.mode = 'parent';
+    document.body.classList.add('parent-mode');
+    savedCodes().forEach(watchChild);
+    render();
+  }
+
+  function childCard(entry) {
+    if (entry.status === 'loading') return `<section class="card child"><div class="loading small-pad"><div class="spinner"></div><p>Looking up code ${esc(fmtCode(entry.code))}…</p></div></section>`;
+    if (entry.status !== 'ok') {
+      return `<section class="card child"><h2>Code ${esc(fmtCode(entry.code))}</h2>
+        <p class="tight">${entry.status === 'error' ? 'This page could not reach the academy. Reload and try again.' : 'No child matches this code. Check it with your coach; codes look like ABCDE-23456.'}</p>
+        <div class="toolbar"><button class="small danger" data-act="parent-remove" data-code="${entry.code}">Remove</button></div></section>`;
+    }
+    const d = entry.data;
+    const cur = (n) => `${d.currency}${Number(n || 0).toLocaleString()}`;
+    const tone = d.balance < 0 ? 'bad' : d.balance <= LOW_BALANCE ? 'warn' : 'good';
+    const big = d.balance < 0 ? `Owes ${fmtSessions(-d.balance)}` : `${fmtSessions(d.balance)} left`;
+    const sub = d.balance < 0
+      ? `${cur(d.owed)} to pay for sessions already attended`
+      : d.balance === 0 ? `Time to renew: ${cur(d.fee)} for ${d.perMonth} sessions` : `${cur(d.fee)} buys ${d.perMonth} sessions`;
+    return `<section class="card child">
+      <div class="between"><div><h2 class="flush">${esc(d.name)}</h2><span class="muted">${esc(d.group)}${d.active ? '' : ' · not currently active'}</span></div>
+        <button class="small" data-act="parent-remove" data-code="${entry.code}">Remove</button></div>
+      <div class="balance-big ${tone}"><div class="value">${esc(big)}</div><div class="sub">${esc(sub)}</div></div>
+      <div class="facts">
+        <div><div class="hint">Attended in ${esc(fmtMonth(d.month))}</div><strong>${fmtSessions(d.attendedThisMonth)}</strong></div>
+        <div><div class="hint">Last payment</div><strong>${d.lastPayment ? `${cur(d.lastPayment.amount)}` : 'None yet'}</strong>${d.lastPayment ? ` <span class="muted">on ${fmtDate(d.lastPayment.date)}, ${fmtSessions(d.lastPayment.sessions)}</span>` : ''}</div>
+      </div>
+      <h3>Recent sessions</h3>
+      ${d.recent.length ? `<div class="table-wrap"><table><tbody>${d.recent.map((r) => `<tr><td>${fmtDate(r.d)}</td><td>${esc(r.t)}</td><td><span class="mark m-${esc(r.s)}">${esc(STATUS[r.s]?.label || r.s)}</span></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted tight">No sessions recorded yet.</p>'}
+      <p class="hint tight">Updated ${new Date(d.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Questions about this balance? Ask your coach.</p>
+    </section>`;
+  }
+
+  views.parent = () => {
+    const entries = [...parent.children.values()];
+    const academy = entries.find((e) => e.data)?.data.academy;
+    return `
+      <div class="page-head"><h1>${academy ? esc(academy) : 'Your child’s sessions'}</h1></div>
+      ${entries.map(childCard).join('')}
+      <section class="card">
+        <h2>${entries.length ? 'Add another child' : 'Enter your child’s code'}</h2>
+        <p class="muted tight">Your coach sends each family a private code. It shows only your own child's sessions and attendance.</p>
+        <form class="toolbar" id="parent-form">
+          <input id="parent-code" placeholder="ABCDE-23456" autocomplete="off" autocapitalize="characters" aria-label="Child's code" maxlength="14" class="code-input">
+          <button class="primary" type="submit">Show sessions</button>
+        </form>
+        ${parent.error ? `<p class="hint bad-text">${esc(parent.error)}</p>` : ''}
+      </section>`;
+  };
+
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id !== 'parent-form') return;
+    e.preventDefault();
+    const code = normCode($('#parent-code').value);
+    if (code.length !== 10) {
+      parent.error = 'Codes have 10 letters and numbers, like ABCDE-23456.';
+      return render();
+    }
+    parent.error = '';
+    await watchChild(code);
+    storeCodes();
+    render();
+  });
+
+  actions['parent-remove'] = (el) => {
+    const entry = parent.children.get(el.dataset.code);
+    entry?.unsub?.();
+    parent.children.delete(el.dataset.code);
+    storeCodes();
+    render();
+  };
+  READ_ONLY_ACTS.add('parent-remove');
 
   render();
   if (Store.mode === 'connecting') connectCloud().catch((e) => {
