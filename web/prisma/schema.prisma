@@ -1,0 +1,1734 @@
+// MJ Football Academy — database schema
+//
+// Conventions
+//  - Money is stored as integer kobo (1 NGN = 100 kobo) in *Kobo columns. Never floats.
+//  - Columns ending in *Enc hold AES-256-GCM ciphertext produced by src/lib/crypto.ts.
+//  - Branch-scoped tables carry branchId so access can be filtered per branch.
+//  - Financial and credit records are append-only: corrections are new rows, never deletes.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum DominantFoot {
+  LEFT
+  RIGHT
+  BOTH
+}
+
+enum PlayerStatus {
+  ACTIVE
+  PENDING
+  TRIAL
+  SUSPENDED
+  INACTIVE
+  GRADUATED
+  TRANSFERRED
+}
+
+enum RegistrationType {
+  FULL
+  TRIAL
+}
+
+enum RegistrationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  TRIAL_SCHEDULED
+  WAITLISTED
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+enum ConsentType {
+  PARTICIPATION
+  MEDICAL_TREATMENT
+  PHOTO
+  VIDEO
+  DATA_PROCESSING
+}
+
+enum ClearanceStatus {
+  PENDING
+  CLEARED
+  NOT_CLEARED
+  EXPIRED
+}
+
+enum StaffType {
+  HEAD_COACH
+  COACH
+  ASSISTANT_COACH
+  GOALKEEPER_COACH
+  FITNESS_COACH
+  ADMINISTRATOR
+  ACCOUNTANT
+  MEDICAL
+  OTHER
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  ON_LEAVE
+  PROBATION
+  SUSPENDED
+  TERMINATED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  VOLUNTEER
+}
+
+enum SessionStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  POSTPONED
+}
+
+enum CancellationType {
+  WEATHER
+  HOLIDAY
+  VENUE
+  COACH_UNAVAILABLE
+  OTHER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+  INJURED
+}
+
+enum AttendanceMethod {
+  MANUAL
+  BULK
+  QR
+}
+
+enum SessionPlayerReason {
+  MAKEUP
+  TRIAL
+  GUEST
+}
+
+enum BillingModel {
+  MONTHLY_CALENDAR
+  SESSION_PACKAGE
+}
+
+enum SubscriptionStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum CreditEntryType {
+  ALLOCATION
+  ATTENDANCE_DEDUCTION
+  ATTENDANCE_REVERSAL
+  MANUAL_ADJUSTMENT
+  MAKEUP_GRANT
+  EXPIRY
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  WAIVED
+  REFUNDED
+  VOID
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  PAYSTACK
+  POS
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REVERSED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSED
+  REJECTED
+}
+
+enum DiscountKind {
+  SIBLING
+  SCHOLARSHIP
+  PROMOTION
+  OTHER
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum AssessmentCategory {
+  TECHNICAL
+  PHYSICAL
+  TACTICAL
+  MENTAL
+}
+
+enum AssessmentPeriod {
+  MONTHLY
+  QUARTERLY
+  AD_HOC
+}
+
+enum AssessmentStatus {
+  DRAFT
+  SUBMITTED
+  PUBLISHED
+}
+
+enum GoalStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ACHIEVED
+  DROPPED
+}
+
+enum PlanPhase {
+  WARM_UP
+  TECHNICAL
+  TACTICAL
+  SMALL_SIDED_GAME
+  FITNESS
+  COOL_DOWN
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum MatchType {
+  FRIENDLY
+  INTERNAL
+  TOURNAMENT
+  LEAGUE
+}
+
+enum MatchStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  POSTPONED
+}
+
+enum InjuryStatus {
+  ACTIVE
+  RECOVERING
+  CLEARED
+}
+
+enum IncidentStatus {
+  OPEN
+  ESCALATED
+  RESOLVED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum DocumentType {
+  REGISTRATION_FORM
+  BIRTH_CERTIFICATE
+  CONSENT_FORM
+  MEDICAL_CLEARANCE
+  PLAYER_AGREEMENT
+  STAFF_CONTRACT
+  CERTIFICATION
+  RECEIPT
+  DEVELOPMENT_REPORT
+  CERTIFICATE
+  PHOTO
+  OTHER
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  WHATSAPP
+  SMS
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  NOT_SENT_NO_PROVIDER
+}
+
+enum AnnouncementAudience {
+  ALL
+  BRANCH
+  AGE_GROUP
+  PARENTS
+  STAFF
+}
+
+enum InventoryTxType {
+  PURCHASE
+  ISSUE
+  RETURN
+  DAMAGE
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum AuthTokenType {
+  PASSWORD_SETUP
+  PASSWORD_RESET
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+// ───────────────────────── Academy & structure ─────────────────────────
+
+/// Singleton row (id = "default").
+model AcademySettings {
+  id                           String             @id @default("default")
+  name                         String             @default("MJ Football Academy")
+  shortName                    String             @default("MJ Academy")
+  logoKey                      String?
+  primaryColor                 String             @default("#13804f")
+  accentColor                  String             @default("#f2b705")
+  contactEmail                 String?
+  contactPhone                 String?
+  address                      String?
+  website                      String?
+  currency                     String             @default("NGN")
+  timezone                     String             @default("Africa/Lagos")
+  academyIdPrefix              String             @default("MJA")
+  defaultSessionMinutes        Int                @default(90)
+  defaultMonthlyFeeKobo        Int                @default(5000000)
+  defaultSessionsPerPackage    Int                @default(12)
+  registrationFeeKobo          Int                @default(0)
+  /// Statuses that consume a session credit, e.g. ["PRESENT","LATE"].
+  creditDeductStatuses         AttendanceStatus[] @default([PRESENT, LATE])
+  /// Allow players with zero credits / overdue fees to be marked present.
+  allowAttendanceWithoutCredit Boolean            @default(true)
+  paymentInstructions          String?
+  /// Age is computed on this month/day of the current year for age-group placement.
+  ageCutoffMonth               Int                @default(1)
+  ageCutoffDay                 Int                @default(1)
+  mfaRequiredForPrivileged     Boolean            @default(true)
+  dataRetentionMonths          Int                @default(84)
+  updatedAt                    DateTime           @updatedAt
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  address   String?
+  city      String?
+  state     String?
+  phone     String?
+  email     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  venues            Venue[]
+  ageGroups         AgeGroup[]
+  players           Player[]
+  staff             StaffProfile[]
+  userRoles         UserRole[]
+  sessions          TrainingSession[]
+  recurrences       RecurrenceRule[]
+  registrations     Registration[]
+  invoices          Invoice[]
+  payments          Payment[]
+  expenses          Expense[]
+  incomes           Income[]
+  teams             Team[]
+  matches           Match[]
+  inventoryItems    InventoryItem[]
+  announcements     Announcement[]
+  incidents         Incident[]
+  holidays          Holiday[]
+  competitions      Competition[]
+  subscriptionPlans SubscriptionPlan[]
+}
+
+model Venue {
+  id        String   @id @default(cuid())
+  branchId  String
+  name      String
+  address   String?
+  surface   String?
+  capacity  Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch      Branch            @relation(fields: [branchId], references: [id])
+  sessions    TrainingSession[]
+  recurrences RecurrenceRule[]
+
+  @@unique([branchId, name])
+}
+
+model Season {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+  teams     Team[]
+}
+
+model AgeGroup {
+  id              String   @id @default(cuid())
+  branchId        String
+  name            String
+  code            String
+  description     String?
+  /// Inclusive minimum age on the cutoff date (null = no minimum).
+  minAge          Int?
+  /// "Under-N": age on the cutoff date must be < maxAgeExclusive.
+  maxAgeExclusive Int?
+  capacity        Int?
+  color           String   @default("#13804f")
+  sortOrder       Int      @default(0)
+  isActive        Boolean  @default(true)
+  mergedIntoId    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch                 Branch               @relation(fields: [branchId], references: [id])
+  mergedInto             AgeGroup?            @relation("AgeGroupMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom             AgeGroup[]           @relation("AgeGroupMerge")
+  players                Player[]
+  staff                  StaffAgeGroup[]
+  sessions               TrainingSession[]
+  recurrences            RecurrenceRule[]
+  teams                  Team[]
+  registrationsRequested Registration[]       @relation("RequestedAgeGroup")
+  registrationsAssigned  Registration[]       @relation("AssignedAgeGroup")
+  plans                  TrainingPlan[]
+  templates              AssessmentTemplate[]
+  matches                Match[]
+  announcements          Announcement[]
+  subscriptionPlans      SubscriptionPlan[]
+
+  @@unique([branchId, name])
+  @@unique([branchId, code])
+  @@index([branchId, isActive])
+}
+
+model Team {
+  id         String   @id @default(cuid())
+  branchId   String
+  ageGroupId String
+  seasonId   String?
+  name       String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  branch   Branch            @relation(fields: [branchId], references: [id])
+  ageGroup AgeGroup          @relation(fields: [ageGroupId], references: [id])
+  season   Season?           @relation(fields: [seasonId], references: [id])
+  sessions TrainingSession[]
+  matches  Match[]
+
+  @@unique([branchId, name])
+}
+
+/// Atomic counters for human-readable sequences (academy IDs, invoice numbers…).
+model Counter {
+  key   String @id
+  value Int    @default(0)
+}
+
+// ───────────────────────── Identity & access ─────────────────────────
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  name                String
+  phone               String?
+  passwordHash        String?
+  isActive            Boolean   @default(true)
+  mfaEnabled          Boolean   @default(false)
+  mfaSecretEnc        String?
+  mfaPendingSecretEnc String?
+  failedLoginCount    Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  passwordChangedAt   DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  roles         UserRole[]
+  sessions      Session[]
+  authTokens    AuthToken[]
+  staffProfile  StaffProfile?
+  guardian      Guardian?
+  player        Player?                  @relation("PlayerAccount")
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  preferences   NotificationPreference[]
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  /// Higher rank = more privileged. Users can only manage roles with a lower rank.
+  rank        Int      @default(0)
+  /// Privileged roles must enrol in MFA when the academy setting is on.
+  privileged  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  permissions RolePermission[]
+  users       UserRole[]
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique
+  module      String
+  description String
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+/// A role granted to a user, optionally limited to one branch (branchId = null → all branches).
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  branchId  String?
+  createdAt DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role    @relation(fields: [roleId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@unique([userId, roleId, branchId])
+  @@index([userId])
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  tokenHash   String   @unique
+  userId      String
+  mfaVerified Boolean  @default(false)
+  ip          String?
+  userAgent   String?
+  expiresAt   DateTime
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuthToken {
+  id        String        @id @default(cuid())
+  tokenHash String        @unique
+  userId    String
+  type      AuthTokenType
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RateLimitBucket {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  branchId   String?
+  summary    String?
+  before     Json?
+  after      Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+// ───────────────────────── Staff ─────────────────────────
+
+model StaffProfile {
+  id                    String           @id @default(cuid())
+  userId                String?          @unique
+  branchId              String
+  firstName             String
+  lastName              String
+  email                 String?
+  phone                 String?
+  staffType             StaffType
+  jobTitle              String?
+  employmentStatus      EmploymentStatus @default(ACTIVE)
+  employmentType        EmploymentType   @default(FULL_TIME)
+  startDate             DateTime?        @db.Date
+  endDate               DateTime?        @db.Date
+  qualifications        String?
+  bio                   String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  photoKey              String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  user            User?                   @relation(fields: [userId], references: [id])
+  branch          Branch                  @relation(fields: [branchId], references: [id])
+  ageGroups       StaffAgeGroup[]
+  certifications  Certification[]
+  availability    StaffAvailability[]
+  sessionsLed     TrainingSession[]       @relation("SessionCoach")
+  assistantIn     SessionAssistant[]
+  recurrences     RecurrenceRule[]
+  primaryPlayers  Player[]                @relation("PrimaryCoach")
+  staffAttendance StaffAttendance[]
+  salaryRecords   SalaryRecord[]
+  reviews         PerformanceReview[]     @relation("ReviewSubject")
+  reviewsGiven    PerformanceReview[]     @relation("Reviewer")
+  assessments     PerformanceAssessment[]
+  documents       Document[]
+  expenses        Expense[]
+  inventoryTx     InventoryTransaction[]
+
+  @@index([branchId, employmentStatus])
+}
+
+model StaffAgeGroup {
+  staffId    String
+  ageGroupId String
+
+  staff    StaffProfile @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  ageGroup AgeGroup     @relation(fields: [ageGroupId], references: [id], onDelete: Cascade)
+
+  @@id([staffId, ageGroupId])
+}
+
+model Certification {
+  id         String    @id @default(cuid())
+  staffId    String
+  name       String
+  issuer     String?
+  issuedAt   DateTime? @db.Date
+  expiresAt  DateTime? @db.Date
+  documentId String?
+  createdAt  DateTime  @default(now())
+
+  staff StaffProfile @relation(fields: [staffId], references: [id], onDelete: Cascade)
+}
+
+/// Weekly working pattern. weekday: 0 = Sunday … 6 = Saturday. Times "HH:mm" local.
+model StaffAvailability {
+  id        String @id @default(cuid())
+  staffId   String
+  weekday   Int
+  startTime String
+  endTime   String
+
+  staff StaffProfile @relation(fields: [staffId], references: [id], onDelete: Cascade)
+}
+
+model StaffAttendance {
+  id        String   @id @default(cuid())
+  staffId   String
+  date      DateTime @db.Date
+  status    String
+  note      String?
+  createdAt DateTime @default(now())
+
+  staff StaffProfile @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, date])
+}
+
+model SalaryRecord {
+  id             String    @id @default(cuid())
+  staffId        String
+  period         String
+  grossKobo      Int
+  deductionsKobo Int       @default(0)
+  netKobo        Int
+  status         String    @default("PENDING")
+  paidAt         DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+
+  staff StaffProfile @relation(fields: [staffId], references: [id])
+
+  @@unique([staffId, period])
+}
+
+model PerformanceReview {
+  id         String   @id @default(cuid())
+  staffId    String
+  reviewerId String
+  period     String
+  rating     Int
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  staff    StaffProfile @relation("ReviewSubject", fields: [staffId], references: [id])
+  reviewer StaffProfile @relation("Reviewer", fields: [reviewerId], references: [id])
+}
+
+// ───────────────────────── Players & families ─────────────────────────
+
+model Player {
+  id                 String        @id @default(cuid())
+  academyId          String        @unique
+  branchId           String
+  userId             String?       @unique
+  firstName          String
+  middleName         String?
+  lastName           String
+  preferredName      String?
+  dateOfBirth        DateTime      @db.Date
+  gender             Gender
+  nationality        String        @default("Nigerian")
+  address            String?
+  city               String?
+  state              String?
+  phone              String?
+  photoKey           String?
+  registrationDate   DateTime      @default(now()) @db.Date
+  status             PlayerStatus  @default(PENDING)
+  ageGroupId         String?
+  primaryCoachId     String?
+  preferredPosition  String?
+  secondaryPosition  String?
+  dominantFoot       DominantFoot?
+  previousExperience String?
+  jerseyNumber       Int?
+  jerseySize         String?
+  schoolName         String?
+  notes              String?
+  photoConsent       Boolean       @default(false)
+  videoConsent       Boolean       @default(false)
+  archivedAt         DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  branch            Branch                  @relation(fields: [branchId], references: [id])
+  user              User?                   @relation("PlayerAccount", fields: [userId], references: [id])
+  ageGroup          AgeGroup?               @relation(fields: [ageGroupId], references: [id])
+  primaryCoach      StaffProfile?           @relation("PrimaryCoach", fields: [primaryCoachId], references: [id])
+  guardians         PlayerGuardian[]
+  emergencyContacts EmergencyContact[]
+  medical           MedicalRecord?
+  consents          ConsentRecord[]
+  registration      Registration?
+  attendance        Attendance[]
+  sessionEntries    SessionPlayer[]
+  subscriptions     PlayerSubscription[]
+  creditEntries     SessionCreditEntry[]
+  invoices          Invoice[]
+  payments          Payment[]
+  assessments       PerformanceAssessment[]
+  goals             DevelopmentGoal[]
+  matchStats        MatchStatistic[]
+  injuries          Injury[]
+  incidents         Incident[]
+  documents         Document[]
+  achievements      Achievement[]
+  inventoryTx       InventoryTransaction[]
+  transfers         PlayerTransfer[]
+
+  @@index([branchId, status])
+  @@index([ageGroupId])
+  @@index([lastName, firstName])
+}
+
+/// History of age-group and branch moves.
+model PlayerTransfer {
+  id             String   @id @default(cuid())
+  playerId       String
+  fromBranchId   String?
+  toBranchId     String?
+  fromAgeGroupId String?
+  toAgeGroupId   String?
+  reason         String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id])
+
+  @@index([playerId])
+}
+
+model Guardian {
+  id               String              @id @default(cuid())
+  userId           String?             @unique
+  firstName        String
+  lastName         String
+  email            String?
+  phone            String
+  whatsapp         String?
+  address          String?
+  occupation       String?
+  preferredChannel NotificationChannel @default(WHATSAPP)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  user          User?            @relation(fields: [userId], references: [id])
+  players       PlayerGuardian[]
+  consents      ConsentRecord[]
+  invoices      Invoice[]
+  notifications Notification[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model PlayerGuardian {
+  playerId           String
+  guardianId         String
+  relationship       String
+  isPrimary          Boolean  @default(false)
+  isEmergencyContact Boolean  @default(true)
+  canPickUp          Boolean  @default(true)
+  receivesBilling    Boolean  @default(true)
+  createdAt          DateTime @default(now())
+
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, guardianId])
+  @@index([guardianId])
+}
+
+model EmergencyContact {
+  id           String @id @default(cuid())
+  playerId     String
+  name         String
+  phone        String
+  relationship String
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+/// Sensitive: all free-text fields are encrypted at rest.
+model MedicalRecord {
+  id                       String          @id @default(cuid())
+  playerId                 String          @unique
+  conditionsEnc            String?
+  allergiesEnc             String?
+  medicationsEnc           String?
+  emergencyInstructionsEnc String?
+  bloodGroupEnc            String?
+  doctorNameEnc            String?
+  doctorPhoneEnc           String?
+  clearanceStatus          ClearanceStatus @default(PENDING)
+  clearanceExpiresAt       DateTime?       @db.Date
+  updatedById              String?
+  updatedAt                DateTime        @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+model ConsentRecord {
+  id             String      @id @default(cuid())
+  playerId       String?
+  guardianId     String?
+  registrationId String?
+  type           ConsentType
+  granted        Boolean
+  version        String
+  signedName     String
+  signedAt       DateTime    @default(now())
+  ip             String?
+  revokedAt      DateTime?
+
+  player       Player?       @relation(fields: [playerId], references: [id])
+  guardian     Guardian?     @relation(fields: [guardianId], references: [id])
+  registration Registration? @relation(fields: [registrationId], references: [id])
+
+  @@index([playerId, type])
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  playerId    String
+  title       String
+  description String?
+  awardedOn   DateTime @db.Date
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────── Admissions ─────────────────────────
+
+model Registration {
+  id                  String             @id @default(cuid())
+  reference           String             @unique
+  branchId            String
+  type                RegistrationType   @default(FULL)
+  status              RegistrationStatus @default(SUBMITTED)
+  childFirstName      String
+  childLastName       String
+  childDateOfBirth    DateTime           @db.Date
+  childGender         Gender
+  guardianFirstName   String
+  guardianLastName    String
+  guardianEmail       String?
+  guardianPhone       String
+  /// Full submitted application (non-medical fields).
+  payload             Json
+  /// Medical section of the application, encrypted JSON.
+  medicalEnc          String?
+  requestedAgeGroupId String?
+  assignedAgeGroupId  String?
+  trialDate           DateTime?
+  waitlistedAt        DateTime?
+  reviewedById        String?
+  reviewedAt          DateTime?
+  decisionNotes       String?
+  playerId            String?            @unique
+  submittedIp         String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  branch            Branch          @relation(fields: [branchId], references: [id])
+  requestedAgeGroup AgeGroup?       @relation("RequestedAgeGroup", fields: [requestedAgeGroupId], references: [id])
+  assignedAgeGroup  AgeGroup?       @relation("AssignedAgeGroup", fields: [assignedAgeGroupId], references: [id])
+  player            Player?         @relation(fields: [playerId], references: [id])
+  consents          ConsentRecord[]
+  documents         Document[]
+
+  @@index([branchId, status])
+  @@index([createdAt])
+}
+
+// ───────────────────────── Training calendar & attendance ─────────────────────────
+
+model RecurrenceRule {
+  id              String   @id @default(cuid())
+  branchId        String
+  title           String
+  ageGroupId      String?
+  venueId         String?
+  coachId         String?
+  /// Weekdays 0 (Sun) … 6 (Sat).
+  weekdays        Int[]
+  intervalWeeks   Int      @default(1)
+  startDate       DateTime @db.Date
+  endDate         DateTime @db.Date
+  startTime       String
+  durationMinutes Int
+  capacity        Int?
+  objectives      String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  branch   Branch            @relation(fields: [branchId], references: [id])
+  ageGroup AgeGroup?         @relation(fields: [ageGroupId], references: [id])
+  venue    Venue?            @relation(fields: [venueId], references: [id])
+  coach    StaffProfile?     @relation(fields: [coachId], references: [id])
+  sessions TrainingSession[]
+}
+
+model Holiday {
+  id        String   @id @default(cuid())
+  branchId  String?
+  date      DateTime @db.Date
+  name      String
+  createdAt DateTime @default(now())
+
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([date])
+}
+
+model TrainingSession {
+  id                  String            @id @default(cuid())
+  branchId            String
+  title               String
+  ageGroupId          String?
+  teamId              String?
+  venueId             String?
+  coachId             String?
+  startsAt            DateTime
+  endsAt              DateTime
+  status              SessionStatus     @default(SCHEDULED)
+  cancellationType    CancellationType?
+  cancellationReason  String?
+  capacity            Int?
+  objectives          String?
+  notes               String?
+  countsTowardCredits Boolean           @default(true)
+  recurrenceId        String?
+  trainingPlanId      String?
+  rescheduledFromId   String?           @unique
+  checkInCode         String?           @unique
+  createdById         String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  branch          Branch             @relation(fields: [branchId], references: [id])
+  ageGroup        AgeGroup?          @relation(fields: [ageGroupId], references: [id])
+  team            Team?              @relation(fields: [teamId], references: [id])
+  venue           Venue?             @relation(fields: [venueId], references: [id])
+  coach           StaffProfile?      @relation("SessionCoach", fields: [coachId], references: [id])
+  recurrence      RecurrenceRule?    @relation(fields: [recurrenceId], references: [id])
+  trainingPlan    TrainingPlan?      @relation(fields: [trainingPlanId], references: [id])
+  rescheduledFrom TrainingSession?   @relation("Reschedule", fields: [rescheduledFromId], references: [id])
+  rescheduledTo   TrainingSession?   @relation("Reschedule")
+  assistants      SessionAssistant[]
+  extraPlayers    SessionPlayer[]
+  attendance      Attendance[]
+  injuries        Injury[]
+
+  @@index([branchId, startsAt])
+  @@index([coachId, startsAt])
+  @@index([venueId, startsAt])
+  @@index([ageGroupId, startsAt])
+}
+
+model SessionAssistant {
+  sessionId String
+  staffId   String
+
+  session TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  staff   StaffProfile    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, staffId])
+}
+
+/// Players attending a session outside their own age group (makeup, trial, guest).
+model SessionPlayer {
+  sessionId    String
+  playerId     String
+  reason       SessionPlayerReason
+  approvedById String?
+  createdAt    DateTime            @default(now())
+
+  session TrainingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  player  Player          @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, playerId])
+}
+
+model Attendance {
+  id           String           @id @default(cuid())
+  sessionId    String
+  playerId     String
+  status       AttendanceStatus
+  method       AttendanceMethod @default(MANUAL)
+  note         String?
+  checkInAt    DateTime?
+  recordedById String?
+  /// Incremented on every change; used for optimistic concurrency.
+  version      Int              @default(1)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  session       TrainingSession      @relation(fields: [sessionId], references: [id])
+  player        Player               @relation(fields: [playerId], references: [id])
+  history       AttendanceHistory[]
+  creditEntries SessionCreditEntry[]
+
+  @@unique([sessionId, playerId])
+  @@index([playerId])
+}
+
+model AttendanceHistory {
+  id           String            @id @default(cuid())
+  attendanceId String
+  fromStatus   AttendanceStatus?
+  toStatus     AttendanceStatus
+  reason       String?
+  changedById  String?
+  createdAt    DateTime          @default(now())
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────── Billing & finance ─────────────────────────
+
+model SubscriptionPlan {
+  id               String       @id @default(cuid())
+  branchId         String?
+  ageGroupId       String?
+  name             String
+  description      String?
+  billingModel     BillingModel
+  priceKobo        Int
+  sessionsIncluded Int?
+  /// For SESSION_PACKAGE: days the credits stay valid.
+  validityDays     Int?
+  sessionMinutes   Int          @default(90)
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  branch        Branch?              @relation(fields: [branchId], references: [id])
+  ageGroup      AgeGroup?            @relation(fields: [ageGroupId], references: [id])
+  subscriptions PlayerSubscription[]
+}
+
+model PlayerSubscription {
+  id                String             @id @default(cuid())
+  playerId          String
+  planId            String
+  status            SubscriptionStatus @default(PENDING_PAYMENT)
+  startDate         DateTime           @db.Date
+  endDate           DateTime           @db.Date
+  priceKobo         Int
+  discountKobo      Int                @default(0)
+  sessionsAllocated Int                @default(0)
+  autoRenew         Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  player        Player               @relation(fields: [playerId], references: [id])
+  plan          SubscriptionPlan     @relation(fields: [planId], references: [id])
+  creditEntries SessionCreditEntry[]
+  invoiceItems  InvoiceItem[]
+
+  @@index([playerId, status])
+}
+
+/// Append-only ledger. A player's balance is SUM(delta). idempotencyKey prevents double posting.
+model SessionCreditEntry {
+  id             String          @id @default(cuid())
+  playerId       String
+  subscriptionId String?
+  attendanceId   String?
+  type           CreditEntryType
+  delta          Int
+  reason         String?
+  idempotencyKey String          @unique
+  createdById    String?
+  createdAt      DateTime        @default(now())
+
+  player       Player              @relation(fields: [playerId], references: [id])
+  subscription PlayerSubscription? @relation(fields: [subscriptionId], references: [id])
+  attendance   Attendance?         @relation(fields: [attendanceId], references: [id])
+
+  @@index([playerId, createdAt])
+}
+
+model DiscountRule {
+  id        String       @id @default(cuid())
+  name      String
+  kind      DiscountKind
+  type      DiscountType
+  /// Percent (0-100) or fixed kobo amount depending on type.
+  value     Int
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+}
+
+model Invoice {
+  id           String        @id @default(cuid())
+  number       String        @unique
+  branchId     String
+  playerId     String
+  guardianId   String?
+  status       InvoiceStatus @default(PENDING)
+  issueDate    DateTime      @db.Date
+  dueDate      DateTime      @db.Date
+  subtotalKobo Int
+  discountKobo Int           @default(0)
+  totalKobo    Int
+  paidKobo     Int           @default(0)
+  notes        String?
+  voidedAt     DateTime?
+  createdById  String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  branch   Branch        @relation(fields: [branchId], references: [id])
+  player   Player        @relation(fields: [playerId], references: [id])
+  guardian Guardian?     @relation(fields: [guardianId], references: [id])
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@index([branchId, status])
+  @@index([playerId])
+}
+
+model InvoiceItem {
+  id             String  @id @default(cuid())
+  invoiceId      String
+  subscriptionId String?
+  description    String
+  quantity       Int     @default(1)
+  unitKobo       Int
+  totalKobo      Int
+
+  invoice      Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  subscription PlayerSubscription? @relation(fields: [subscriptionId], references: [id])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  reference         String        @unique
+  branchId          String
+  invoiceId         String?
+  playerId          String?
+  amountKobo        Int
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+  provider          String?
+  providerReference String?       @unique
+  providerPayload   Json?
+  receiptNumber     String?       @unique
+  paidAt            DateTime?
+  recordedById      String?
+  verifiedById      String?
+  verifiedAt        DateTime?
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  branch  Branch   @relation(fields: [branchId], references: [id])
+  invoice Invoice? @relation(fields: [invoiceId], references: [id])
+  player  Player?  @relation(fields: [playerId], references: [id])
+  refunds Refund[]
+
+  @@index([branchId, paidAt])
+}
+
+model PaymentWebhookEvent {
+  id             String    @id @default(cuid())
+  provider       String
+  eventId        String
+  eventType      String
+  signatureValid Boolean
+  payload        Json
+  processedAt    DateTime?
+  error          String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([provider, eventId])
+}
+
+model Refund {
+  id                String       @id @default(cuid())
+  paymentId         String
+  amountKobo        Int
+  reason            String
+  status            RefundStatus @default(REQUESTED)
+  providerReference String?
+  requestedById     String?
+  processedById     String?
+  processedAt       DateTime?
+  createdAt         DateTime     @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+}
+
+model Expense {
+  id           String   @id @default(cuid())
+  branchId     String
+  category     String
+  amountKobo   Int
+  description  String
+  vendor       String?
+  expenseDate  DateTime @db.Date
+  staffId      String?
+  receiptDocId String?
+  recordedById String?
+  createdAt    DateTime @default(now())
+
+  branch Branch        @relation(fields: [branchId], references: [id])
+  staff  StaffProfile? @relation(fields: [staffId], references: [id])
+
+  @@index([branchId, expenseDate])
+}
+
+model Income {
+  id           String   @id @default(cuid())
+  branchId     String
+  category     String
+  amountKobo   Int
+  source       String
+  receivedOn   DateTime @db.Date
+  notes        String?
+  recordedById String?
+  createdAt    DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+// ───────────────────────── Development ─────────────────────────
+
+model AssessmentTemplate {
+  id         String   @id @default(cuid())
+  name       String
+  ageGroupId String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  ageGroup    AgeGroup?               @relation(fields: [ageGroupId], references: [id])
+  criteria    AssessmentCriterion[]
+  assessments PerformanceAssessment[]
+}
+
+model AssessmentCriterion {
+  id          String             @id @default(cuid())
+  templateId  String
+  category    AssessmentCategory
+  name        String
+  description String?
+  maxScore    Int                @default(5)
+  sortOrder   Int                @default(0)
+
+  template AssessmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  scores   AssessmentScore[]
+}
+
+model PerformanceAssessment {
+  id             String           @id @default(cuid())
+  playerId       String
+  templateId     String
+  assessorId     String
+  period         AssessmentPeriod
+  assessedOn     DateTime         @db.Date
+  status         AssessmentStatus @default(DRAFT)
+  overallComment String?
+  strengths      String?
+  improvements   String?
+  parentVisible  Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  player   Player             @relation(fields: [playerId], references: [id])
+  template AssessmentTemplate @relation(fields: [templateId], references: [id])
+  assessor StaffProfile       @relation(fields: [assessorId], references: [id])
+  scores   AssessmentScore[]
+
+  @@index([playerId, assessedOn])
+}
+
+model AssessmentScore {
+  id           String  @id @default(cuid())
+  assessmentId String
+  criterionId  String
+  score        Int
+  comment      String?
+
+  assessment PerformanceAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  criterion  AssessmentCriterion   @relation(fields: [criterionId], references: [id])
+
+  @@unique([assessmentId, criterionId])
+}
+
+model DevelopmentGoal {
+  id          String              @id @default(cuid())
+  playerId    String
+  title       String
+  description String?
+  category    AssessmentCategory?
+  targetDate  DateTime?           @db.Date
+  status      GoalStatus          @default(NOT_STARTED)
+  createdById String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+model Drill {
+  id              String     @id @default(cuid())
+  name            String
+  category        PlanPhase
+  description     String
+  durationMinutes Int
+  equipment       String?
+  minPlayers      Int?
+  maxPlayers      Int?
+  difficulty      Difficulty @default(BEGINNER)
+  coachingPoints  String?
+  mediaKeys       String[]
+  createdById     String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  planItems TrainingPlanItem[]
+}
+
+model TrainingPlan {
+  id          String    @id @default(cuid())
+  title       String
+  ageGroupId  String?
+  objectives  String?
+  isTemplate  Boolean   @default(false)
+  weekOf      DateTime? @db.Date
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  ageGroup AgeGroup?          @relation(fields: [ageGroupId], references: [id])
+  items    TrainingPlanItem[]
+  sessions TrainingSession[]
+}
+
+model TrainingPlanItem {
+  id              String    @id @default(cuid())
+  planId          String
+  drillId         String?
+  phase           PlanPhase
+  title           String
+  durationMinutes Int
+  notes           String?
+  sortOrder       Int       @default(0)
+
+  plan  TrainingPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  drill Drill?       @relation(fields: [drillId], references: [id])
+}
+
+// ───────────────────────── Matches ─────────────────────────
+
+model Competition {
+  id        String    @id @default(cuid())
+  branchId  String
+  name      String
+  organizer String?
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+  createdAt DateTime  @default(now())
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  matches Match[]
+}
+
+model Match {
+  id            String      @id @default(cuid())
+  branchId      String
+  ageGroupId    String?
+  teamId        String?
+  competitionId String?
+  type          MatchType
+  opponent      String
+  venueName     String?
+  isHome        Boolean     @default(true)
+  kickoffAt     DateTime
+  status        MatchStatus @default(SCHEDULED)
+  goalsFor      Int?
+  goalsAgainst  Int?
+  report        String?
+  createdById   String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  branch      Branch           @relation(fields: [branchId], references: [id])
+  ageGroup    AgeGroup?        @relation(fields: [ageGroupId], references: [id])
+  team        Team?            @relation(fields: [teamId], references: [id])
+  competition Competition?     @relation(fields: [competitionId], references: [id])
+  stats       MatchStatistic[]
+
+  @@index([branchId, kickoffAt])
+}
+
+model MatchStatistic {
+  id            String  @id @default(cuid())
+  matchId       String
+  playerId      String
+  selected      Boolean @default(true)
+  started       Boolean @default(false)
+  minutesPlayed Int     @default(0)
+  goals         Int     @default(0)
+  assists       Int     @default(0)
+  yellowCards   Int     @default(0)
+  redCards      Int     @default(0)
+  notes         String?
+
+  match  Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id])
+
+  @@unique([matchId, playerId])
+}
+
+// ───────────────────────── Medical & safeguarding ─────────────────────────
+
+model Injury {
+  id               String       @id @default(cuid())
+  playerId         String
+  sessionId        String?
+  occurredAt       DateTime
+  type             String
+  bodyPart         String?
+  severity         Severity     @default(LOW)
+  descriptionEnc   String?
+  status           InjuryStatus @default(ACTIVE)
+  expectedReturnOn DateTime?    @db.Date
+  clearedAt        DateTime?
+  clearedById      String?
+  parentNotifiedAt DateTime?
+  reportedById     String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  player  Player           @relation(fields: [playerId], references: [id])
+  session TrainingSession? @relation(fields: [sessionId], references: [id])
+
+  @@index([playerId, status])
+}
+
+model Incident {
+  id             String         @id @default(cuid())
+  branchId       String
+  playerId       String?
+  type           String
+  severity       Severity
+  descriptionEnc String
+  status         IncidentStatus @default(OPEN)
+  reportedById   String?
+  escalatedToId  String?
+  resolution     String?
+  occurredAt     DateTime
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  branch Branch  @relation(fields: [branchId], references: [id])
+  player Player? @relation(fields: [playerId], references: [id])
+}
+
+// ───────────────────────── Documents ─────────────────────────
+
+model Document {
+  id             String       @id @default(cuid())
+  type           DocumentType
+  title          String
+  storageKey     String       @unique
+  mimeType       String
+  sizeBytes      Int
+  sha256         String
+  playerId       String?
+  staffId        String?
+  registrationId String?
+  isSensitive    Boolean      @default(false)
+  expiresAt      DateTime?    @db.Date
+  uploadedById   String?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  player       Player?       @relation(fields: [playerId], references: [id])
+  staff        StaffProfile? @relation(fields: [staffId], references: [id])
+  registration Registration? @relation(fields: [registrationId], references: [id])
+
+  @@index([playerId])
+  @@index([staffId])
+}
+
+// ───────────────────────── Communication ─────────────────────────
+
+model MessageTemplate {
+  id        String              @id @default(cuid())
+  key       String              @unique
+  name      String
+  channel   NotificationChannel
+  subject   String?
+  body      String
+  isActive  Boolean             @default(true)
+  updatedAt DateTime            @updatedAt
+}
+
+model Announcement {
+  id          String               @id @default(cuid())
+  branchId    String?
+  ageGroupId  String?
+  audience    AnnouncementAudience
+  title       String
+  body        String
+  isUrgent    Boolean              @default(false)
+  publishedAt DateTime?
+  createdById String?
+  createdAt   DateTime             @default(now())
+
+  branch   Branch?   @relation(fields: [branchId], references: [id])
+  ageGroup AgeGroup? @relation(fields: [ageGroupId], references: [id])
+}
+
+model Notification {
+  id                String              @id @default(cuid())
+  userId            String?
+  guardianId        String?
+  channel           NotificationChannel
+  templateKey       String?
+  recipient         String?
+  subject           String?
+  body              String
+  status            NotificationStatus  @default(QUEUED)
+  provider          String?
+  providerMessageId String?
+  error             String?
+  attempts          Int                 @default(0)
+  dedupeKey         String?             @unique
+  scheduledFor      DateTime?
+  sentAt            DateTime?
+  readAt            DateTime?
+  createdAt         DateTime            @default(now())
+
+  user     User?     @relation(fields: [userId], references: [id])
+  guardian Guardian? @relation(fields: [guardianId], references: [id])
+
+  @@index([userId, readAt])
+  @@index([status, scheduledFor])
+}
+
+model NotificationPreference {
+  id       String              @id @default(cuid())
+  userId   String
+  channel  NotificationChannel
+  category String
+  enabled  Boolean             @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel, category])
+}
+
+/// Background job queue (automation engine). dedupeKey prevents duplicate jobs.
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  payload     Json
+  status      JobStatus @default(PENDING)
+  runAt       DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lastError   String?
+  lockedAt    DateTime?
+  dedupeKey   String?   @unique
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  @@index([status, runAt])
+}
+
+// ───────────────────────── Inventory ─────────────────────────
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  items InventoryItem[]
+}
+
+model InventoryItem {
+  id           String   @id @default(cuid())
+  branchId     String
+  supplierId   String?
+  name         String
+  category     String
+  sku          String?
+  unit         String   @default("pcs")
+  quantity     Int      @default(0)
+  reorderLevel Int      @default(0)
+  unitCostKobo Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  branch       Branch                 @relation(fields: [branchId], references: [id])
+  supplier     Supplier?              @relation(fields: [supplierId], references: [id])
+  transactions InventoryTransaction[]
+
+  @@unique([branchId, name])
+}
+
+model InventoryTransaction {
+  id           String          @id @default(cuid())
+  itemId       String
+  type         InventoryTxType
+  quantity     Int
+  unitCostKobo Int?
+  playerId     String?
+  staffId      String?
+  note         String?
+  createdById  String?
+  createdAt    DateTime        @default(now())
+
+  item   InventoryItem @relation(fields: [itemId], references: [id])
+  player Player?       @relation(fields: [playerId], references: [id])
+  staff  StaffProfile? @relation(fields: [staffId], references: [id])
+
+  @@index([itemId, createdAt])
+}

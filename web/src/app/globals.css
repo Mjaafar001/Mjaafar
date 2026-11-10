@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens. --brand / --accent-brand are overridden at runtime from Academy Settings
+ * (see app/layout.tsx), so each academy can apply its own colours.
+ */
+:root {
+  --brand: #13804f;
+  --accent-brand: #f2b705;
+
+  --background: #f6f7f5;
+  --surface: #ffffff;
+  --surface-2: #f0f2ee;
+  --foreground: #0f1a14;
+  --muted: #5d6b63;
+  --border: #e1e6e0;
+  --ring: color-mix(in oklab, var(--brand) 60%, transparent);
+
+  --primary: var(--brand);
+  --primary-foreground: #ffffff;
+  --primary-soft: color-mix(in oklab, var(--brand) 12%, white);
+  --accent: var(--accent-brand);
+
+  --success: #15803d;
+  --success-soft: #dcfce7;
+  --warning: #b45309;
+  --warning-soft: #fef3c7;
+  --danger: #c2410c;
+  --danger-strong: #b91c1c;
+  --danger-soft: #fee2e2;
+  --info: #0369a1;
+  --info-soft: #e0f2fe;
+
+  --sidebar: #0c1f16;
+  --sidebar-foreground: #d5e2da;
+  --sidebar-muted: #7f978a;
+  --sidebar-active: color-mix(in oklab, var(--brand) 35%, #0c1f16);
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: #0a0f0c;
+  --surface: #111814;
+  --surface-2: #17201b;
+  --foreground: #e7eee9;
+  --muted: #8fa198;
+  --border: #223029;
+  --primary-soft: color-mix(in oklab, var(--brand) 22%, #111814);
+  --success-soft: #0f2f1c;
+  --warning-soft: #33240b;
+  --danger-soft: #3a1414;
+  --info-soft: #0b2738;
+  --sidebar: #070c09;
+  --sidebar-active: color-mix(in oklab, var(--brand) 30%, #070c09);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-active: var(--sidebar-active);
+  --font-sans: "Barlow", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Barlow Condensed", "Barlow", ui-sans-serif, sans-serif;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    opacity: 0.6;
+  }
+  .dark input[type="date"]::-webkit-calendar-picker-indicator,
+  .dark input[type="time"]::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+/* Subtle pitch-line texture used on the login hero and sidebar header */
+@utility pitch-lines {
+  background-image:
+    radial-gradient(circle at 50% 50%, transparent 0 22%, rgb(255 255 255 / 0.06) 22% calc(22% + 1.5px), transparent calc(22% + 1.5px)),
+    linear-gradient(90deg, transparent calc(50% - 0.75px), rgb(255 255 255 / 0.06) calc(50% - 0.75px) calc(50% + 0.75px), transparent calc(50% + 0.75px));
+}
+
+@media print {
+  aside, header, .no-print { display: none !important; }
+  main { padding: 0 !important; }
+}

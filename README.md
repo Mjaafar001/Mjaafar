@@ -1,5 +1,7 @@
 # MJ Football Academy
 
+> **New: Academy OS (`web/`)** is the full management platform (Next.js, PostgreSQL), built in phases. Phases 1–2 (foundation and core operations) are complete. See [web/README.md](web/README.md) for setup and [web/docs/PROGRESS.md](web/docs/PROGRESS.md) for status. The lightweight app described below still works unchanged.
+
 A web app for running a football academy with three age groups. Coaches share one set of data, live. Use it to register players, take attendance, track the monthly fee (₦50,000 for 8 sessions), record expenses and pull reports.
 
 ## Two ways to run it
